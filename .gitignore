@@ -1,1 +1,15 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Logs
+npm-debug.log*
+*.log
+
+# Environment variables (TURN credentials, etc. later)
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
