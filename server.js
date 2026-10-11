@@ -13,7 +13,8 @@ server.listen(port, ()=>{
   console.log(`server listening on port http://localhost:${port}`);
 })
 
-const io = new Server(server)
+// const io = new Server(server, { cors: {origin: "*"}})
+const io = new Server(server);
 
 io.on("connection", (socket)=>{
 
@@ -22,7 +23,6 @@ io.on("connection", (socket)=>{
   // 1. Listen for the 'join-room' event from the client
   socket.on("join", roomId => {
     console.log(`user ${socket.id} asking for joining ${roomId}`);
-    socket.data.roomId = roomId;
     //check for room
     const room = io.sockets.adapter.rooms.get(roomId);
     const roomSize = room?.size ?? 0;
@@ -34,14 +34,52 @@ io.on("connection", (socket)=>{
     }
 
     socket.join(roomId);
+    socket.data.roomId = roomId;
     if(roomSize === 0){
       console.log(`first person joined room ${roomId}`);
-      socket.emit("joined", "please wait till someone join");
+
+      //get calleId
+      socket.emit("joined", {
+        count: 1,
+        message: "waiting for other...",
+      });
+
     }else{
+
+      const calle = Array.from(room).at(0);
+      if(calle){
+        socket.data.targetPeerId = calle;
+      }
+
+      // if(!calle){
+        //error message
+      // }
+
       console.log(`another joined room ${roomId}`);
-      socket.emit("joined", "welcome another person is waiting for you");
-      socket.to(roomId).emit("peer-joined", `${socket.id} joined the room`);
+
+      socket.emit("joined", {
+        count: 2,
+        message: "welcome",
+        targetPeerId: calle,
+      });
+
+      socket.to(roomId).emit("peer-joined", {
+        message: `${socket.id} joined the room`,
+        targetPeerId: socket.id,
+      });
     }
+  });
+
+  socket.on('webrtc-offer', ({targetPeerId, sdp})=>{
+    io.to(targetPeerId).emit('webrtc-offer', { senderId: socket.id, sdp: sdp});
+  });
+
+  socket.on('webrtc-answer', ({targetPeerId, sdp})=>{
+    io.to(targetPeerId).emit('webrtc-answer', { sdp: sdp});
+  });
+
+  socket.on('webrtc-ice', ({ targetPeerId, candidate })=>{
+    io.to(targetPeerId).emit('webrtc-ice', { candidate });
   });
 
   socket.on('disconnect', () => {
