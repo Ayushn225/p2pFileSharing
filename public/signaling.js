@@ -17,38 +17,6 @@ socket.on("connect", ()=>{
 
 const configuration = { iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
 
-function initPeerConnection(){
-    peerConnection = new RTCPeerConnection(configuration);
-
-    peerConnection.onicecandidate = async (event)=>{
-        if(event.candidate && targetPeerId){
-            socket.emit('webrtc-ice', {targetPeerId: targetPeerId, candidate: event.candidate});
-        }
-    }
-
-    peerConnection.ondatachannel = (event)=>{
-        console.log("channel recieved");
-        dataChannel = event.channel;
-        setupChannel(dataChannel);
-    };
-
-    peerConnection.onconnectionstatechange = () =>{
-        console.log("connection: ", peerConnection.connectionState);
-    };
-
-}
-
-function setupChannel(channel){
-    channel.onmessage = (event) =>{
-        console.log(`recieved ${event.data}`);
-    }
-
-    channel.onopen = () =>{
-        console.log("channel opened");
-        send("hello");
-    }
-}
-
 socket.on('webrtc-ice', async ({candidate})=>{
 
     if(peerConnection && candidate){
@@ -108,12 +76,3 @@ socket.on('webrtc-offer', async ({senderId, sdp})=>{
 socket.on('webrtc-answer', async ({ sdp })=>{
     await peerConnection.setRemoteDescription(sdp)
 });
-
-function send(msg){
-    const obj = {
-        message: msg,
-        timestamp: new Date()
-    }
-
-    dataChannel.send(JSON.stringify(obj));
-}

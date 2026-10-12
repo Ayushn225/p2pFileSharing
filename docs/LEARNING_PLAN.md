@@ -107,6 +107,20 @@ When someone leaves, the next person in the queue joins automatically.
 - Edge case: someone *in the queue* disconnects → remove them (track it with `socket.data.queuedFor`)
 - WebRTC: the remaining peer must close its old `RTCPeerConnection` and create a new one for the new peer
 
+### Future checkpoint: connection cleanup + send button state
+
+Right now the send button stays enabled after the peer leaves. When the other tab
+closes, `peer-left` arrives instantly over the socket, but WebRTC notices slowly
+(`disconnected` after ~5 s, `failed` after ~30 s), and the channel's `onclose` may never fire.
+
+- `setChatEnabled(enabled)`: the only place that toggles `sendBtn.disabled` / `input.disabled`
+- `closeConnection(reason)`: disable the chat, set the status, close and null out `dataChannel`, `peerConnection`, `targetPeerId` (safe to call more than once)
+- Call `setChatEnabled(true)` in `channel.onopen`
+- Call `closeConnection(...)` from `socket.on("peer-left")`, `channel.onclose`, and `onconnectionstatechange` when the state is `"failed"` (for `"disconnected"`, only show "reconnecting...")
+- Note: calling `peerConnection.close()` yourself may not fire the channel's `onclose`
+- CSS: style `.send-btn:disabled` / `.chat-input:disabled`, because the custom `.send-btn` background hides the browser's disabled look
+- Test: alone → disabled; peer joins → enabled; peer closes tab → disabled immediately; new peer joins → enabled again
+
 ---
 
 ## 3. Suggested file structure
@@ -135,8 +149,9 @@ npm run dev      # http://localhost:3000
 - [x] M0 Loopback
 - [x] M1 Signaling server
 - [x] M2 Peer connection + text
-- [ ] M3 Small file
+- [x] M3 Small file
 - [ ] M4 Chunking + backpressure
 - [ ] M5 UX
 - [ ] M6 Stretch
 - [ ] Future: room waiting queue
+- [ ] Future: connection cleanup + send button state

@@ -4,8 +4,8 @@ Send files directly from one browser to another using **WebRTC**. A small
 Node.js server introduces the two peers. After that, data flows peer to peer
 and never touches the server.
 
-> 🚧 **Work in progress.** Two browsers can already connect and exchange
-> messages over a direct WebRTC data channel. File transfer is next.
+> 🚧 **Work in progress.** Two browsers can connect, chat, and send small files
+> over a direct WebRTC data channel. Large files need chunking, which is next.
 
 ## How it works
 
@@ -47,7 +47,8 @@ each tab: both should log `connection: connected`, then a `hello` message from t
 server.js            Express static server + Socket.IO signaling (rooms, offer/answer/ICE relay)
 public/
   index.html         UI
-  signaling.js       Socket.IO client, peer connection and data channel setup
+  signaling.js       Socket.IO client: rooms, offer/answer/ICE exchange
+  peer.js            Peer connection, data channel, chat and file send/receive
   app.js             Early experiment: two peers connected in a single tab (loopback)
 docs/
   LEARNING_PLAN.md   Concepts to learn and the detailed milestone plan
@@ -58,7 +59,8 @@ docs/
 - [x] Loopback: two peers in one tab
 - [x] Signaling server with 2-person rooms
 - [x] Peer connection across two tabs, text over a data channel
-- [ ] Send a small file (metadata + single buffer)
+- [x] Text chat over the data channel
+- [x] Send a small file (metadata + single buffer, image preview, download link)
 - [ ] Chunking + backpressure for large files
 - [ ] UX: progress bar, transfer speed, shareable room link
 - [ ] Stretch: TURN server, pause/resume, integrity hash, drag-and-drop, deployment

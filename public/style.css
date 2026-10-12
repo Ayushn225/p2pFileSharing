@@ -1,0 +1,155 @@
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body {
+	display: flex;
+	flex-direction: column;
+	height: 100vh;
+	font-family: Arial, sans-serif;
+	background-color: #f4f4f9;
+	padding: 5%;
+}
+
+.chat-body {
+	height: 90%;
+	background-color: #ffffff;
+	padding: 20px;
+	overflow-y: auto;
+	border-bottom: 1px solid #e0e0e0;
+}
+
+.chat-messages {
+	display: flex;
+	flex-direction: column;
+	column-gap: 8px;
+	margin-top: 15px;
+}
+
+.msg {
+	padding: 8px 12px;
+	border-radius: 8px;
+	max-width: 70%;
+	word-wrap: break-word;
+	font-family: sans-serif;
+	margin: 2px;
+}
+
+.message-me {
+	background-color: #0084ff;
+	color: white;
+	align-self: flex-end;
+}
+
+.message-them {
+	background-color: #e5e5ea;
+	color: black;
+	align-self: flex-start;
+}
+
+.message-error {
+	background-color: #ff3b30; /* Error Red */
+	color: white;
+	align-self: center;
+	text-align: center;
+	font-weight: bold;
+}
+
+.timestamp {
+	font-size: 0.7em;
+	opacity: 0.7;
+	display: block;
+	margin-top: 4px;
+	text-align: right;
+}
+
+.input-container {
+	height: 10%;
+	display: flex;
+	align-items: center;
+	padding: 10px 20px;
+	background-color: #f4f4f9;
+	gap: 10px;
+	margin-top: 5px;
+}
+
+.chat-input {
+	flex: 1;
+	padding: 12px;
+	border: 1px solid #ccc;
+	border-radius: 20px;
+	outline: none;
+}
+
+.send-btn {
+	background-color: #007bff;
+	color: white;
+	border: none;
+	border-radius: 50%;
+	width: 40px;
+	height: 40px;
+	cursor: pointer;
+}
+
+.file-name-container {
+	position: absolute;
+	bottom: 5px;
+	left: 10px;
+	background: #e5e5ea;
+	font-family: sans-serif;
+	font-size: 12px;
+	padding: 2px 8px;
+	border-radius: 12px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+.remove-file-btn {
+	background: none;
+	border: none;
+	color: red;
+	font-weight: bold;
+	cursor: pointer;
+	padding: 0;
+}
+
+.attach-label {
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 5px;
+}
+.attach-label:hover {
+	opacity: 0.7;
+}
+
+.chat-thumbnail {
+	display: block;
+	max-width: 200px;
+	max-height: 200px;
+	border-radius: 8px;
+	margin: 8px 0;
+	object-fit: cover;
+}
+
+.download-btn {
+	display: inline-block;
+	text-decoration: none;
+	font-weight: bold;
+	margin: 4px 0;
+}
+
+.download-them {
+	color: #007bff;
+}
+
+.download-me {
+	color: white;
+}
+
+.download-btn:hover {
+	text-decoration: underline;
+}
