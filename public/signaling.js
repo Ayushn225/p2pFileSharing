@@ -7,8 +7,6 @@ let peerConnection;
 let dataChannel;
 let targetPeerId;
 
-const statusPara = document.getElementById("status");
-
 socket.on("connect", ()=>{
     console.log('Connected to server with ID:', socket.id);
     // 1. Tell the server we want to join a specific room
@@ -26,7 +24,7 @@ socket.on('webrtc-ice', async ({candidate})=>{
 
 socket.on("peer-joined", async (data)=>{
     console.log('New room notification:', data.message);
-    statusPara.innerText = data.message;
+    setStatus(data.message);
     targetPeerId = data.targetPeerId;
 
     initPeerConnection();
@@ -41,20 +39,19 @@ socket.on("peer-joined", async (data)=>{
 
 socket.on("room-full", (data)=>{
     console.log('New room notification:', data);
-    statusPara.innerText = data;
+    setStatus(data)
 })
 
 socket.on("peer-left", (data)=>{
     console.log('New room notification:', data);
-    statusPara.innerText = data;
+    setStatus(data)
 })
 
 socket.on("joined", (data)=>{
     console.log('New room notification:', data.message);
 
     const count = data.count;
-    statusPara.innerText = data.message;
-
+    setStatus(data.message);
     if(count === 2){
         targetPeerId = data.targetPeerId;
         initPeerConnection();

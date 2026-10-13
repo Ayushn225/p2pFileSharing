@@ -35,6 +35,8 @@ body {
 	word-wrap: break-word;
 	font-family: sans-serif;
 	margin: 2px;
+	display: flex;
+	flex-direction: column;
 }
 
 .message-me {
@@ -50,11 +52,11 @@ body {
 }
 
 .message-error {
-	background-color: #ff3b30; /* Error Red */
-	color: white;
-	align-self: center;
-	text-align: center;
-	font-weight: bold;
+	background-color: #ff3b30 !important; /* Error Red */
+	color: white  !important;
+	align-self: center  !important;
+	text-align: center  !important;
+	font-weight: bold  !important;
 }
 
 .timestamp {
@@ -66,6 +68,7 @@ body {
 }
 
 .input-container {
+	position: relative;
 	height: 10%;
 	display: flex;
 	align-items: center;

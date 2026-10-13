@@ -121,6 +121,18 @@ closes, `peer-left` arrives instantly over the socket, but WebRTC notices slowly
 - CSS: style `.send-btn:disabled` / `.chat-input:disabled`, because the custom `.send-btn` background hides the browser's disabled look
 - Test: alone → disabled; peer joins → enabled; peer closes tab → disabled immediately; new peer joins → enabled again
 
+### Future checkpoint: file transfer progress bar
+
+Show live progress on both sides while a file is being sent or received.
+
+- Create the file bubble when the transfer **starts** (sender: in `sendFile`; receiver: on `file-meta`), with a `<progress max="100">` inside
+- Give each transfer an id (e.g. a counter or `crypto.randomUUID()`) so `updateProgress(id, percent)` finds the right bubble; send the id in `file-meta`
+- Sender percent: `offset / file.size`; receiver percent: `receivedBytes / fileMetaData.size`
+- Only touch the DOM when the whole-number percent changes (a 500 MB file is ~32,000 chunks)
+- On finish: receiver swaps the bar for the download link; sender shows "✓ sent"; on error, mark the bubble failed
+- Keep the split: peer.js calls UI functions (`createTransferBubble`, `updateProgress`, `finishTransfer`), and ui.js owns the DOM
+- Bonus: show transfer speed (MB/s) and time left next to the bar
+
 ---
 
 ## 3. Suggested file structure
@@ -155,3 +167,4 @@ npm run dev      # http://localhost:3000
 - [ ] M6 Stretch
 - [ ] Future: room waiting queue
 - [ ] Future: connection cleanup + send button state
+- [ ] Future: file transfer progress bar

@@ -3,14 +3,14 @@
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-		<title>Document</title>
+		<title>P2P File Transfer</title>
 		<link href="style.css" rel="stylesheet" />
 	</head>
 	<body>
 		<script src="/socket.io/socket.io.js"></script>
-
 		<script src="signaling.js" defer></script>
 		<script src="peer.js" defer></script>
+        <script src="ui.js" defer></script>
 
 		<!-- adding ui -->
 		<div class="chat-body">
@@ -25,7 +25,7 @@
 				placeholder="Type a message..."
 				autocomplete="off"
 			/>
-			<input type="file" id="fileInput" hidden />
+			<input type="file" id="fileInput" hidden multiple />
 			<label for="fileInput" class="attach-label" aria-label="Attach File"
 				>📎</label
 			>
@@ -45,60 +45,5 @@
 				</button>
 			</div>
 		</form>
-
-		<script>
-			const form = document.querySelector(".input-container");
-			const input = document.querySelector(".chat-input");
-			const sendBtn = document.querySelector(".send-btn");
-			const fileInput = document.querySelector("#fileInput");
-
-			form.addEventListener("submit", async (event) => {
-				event.preventDefault();
-				if (sendBtn.disabled) return;
-
-				const messageText = input.value.trim();
-				const isText = messageText !== "";
-				const isFile = fileInput.files.length > 0;
-
-				if (!isText && !isFile) {
-					return;
-				}
-
-				if (isText) {
-					console.log("sending: ", input.value);
-					send(messageText);
-
-					input.value = "";
-				}
-                if(isFile) {
-                    await sendFile(fileInput.files[0]);
-                    hideFileBadge();
-                }
-			});
-
-			const fileNameDisplay = document.querySelector("#fileNameDisplay");
-			const fileText = fileNameDisplay.querySelector(".file-text");
-			const clearFileBtn = document.querySelector("#clearFileBtn");
-
-			fileInput.addEventListener("change", () => {
-				if (fileInput.files.length > 0) {
-					const chosenFileName = fileInput.files[0].name;
-					fileText.textContent = `📁 ${chosenFileName}`;
-					fileNameDisplay.style.display = "flex";
-				} else {
-					hideFileBadge();
-				}
-			});
-
-			clearFileBtn.addEventListener("click", () => {
-				hideFileBadge();
-			});
-
-			function hideFileBadge() {
-				fileInput.value = "";
-				fileText.textContent = "";
-				fileNameDisplay.style.display = "none";
-			}
-		</script>
 	</body>
 </html>
