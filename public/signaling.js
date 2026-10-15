@@ -2,6 +2,7 @@ const socket = io();
 const queryString = window.location.search;
 const urlParams = new URLSearchParams(queryString); 
 const roomId = urlParams.get('roomId')?? "test"; //added deafult room
+const configuration = { iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
 
 let peerConnection;
 let dataChannel;
@@ -13,20 +14,24 @@ socket.on("connect", ()=>{
     socket.emit('join', roomId);
 });
 
-const configuration = { iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
 
 socket.on('webrtc-ice', async ({candidate})=>{
-
-    if(peerConnection && candidate){
-        await peerConnection.addIceCandidate(candidate);
+    try{
+        if(peerConnection && candidate){
+            await peerConnection.addIceCandidate(candidate);
+        }
+    } catch (e){
+        console.log(`error in peerconnection add ice: ${e}`);
     }
+    
 });
 
 socket.on("peer-joined", async (data)=>{
+    closeConnection('peer-joined'); //safety net in case old connection is still there
+
     console.log('New room notification:', data.message);
     setStatus(data.message);
     targetPeerId = data.targetPeerId;
-
     initPeerConnection();
 
     dataChannel = peerConnection.createDataChannel("file");
@@ -44,7 +49,7 @@ socket.on("room-full", (data)=>{
 
 socket.on("peer-left", (data)=>{
     console.log('New room notification:', data);
-    setStatus(data)
+    closeConnection("peer left, waiting...");
 })
 
 socket.on("joined", (data)=>{
@@ -53,23 +58,38 @@ socket.on("joined", (data)=>{
     const count = data.count;
     setStatus(data.message);
     if(count === 2){
+        closeConnection('joined');
         targetPeerId = data.targetPeerId;
         initPeerConnection();
     }
 });
 
 socket.on('webrtc-offer', async ({senderId, sdp})=>{
-    if(senderId!=targetPeerId){
-        console.log("wrong person");
-        return;
+    try{
+        if(!peerConnection) return;
+        
+        if(senderId!==targetPeerId){
+            console.log("wrong person");
+            return;
+        }
+
+        await peerConnection.setRemoteDescription(sdp);
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        
+        socket.emit('webrtc-answer', {targetPeerId: targetPeerId, sdp: peerConnection.localDescription});
+    } catch (e){
+        console.log(`error in webrtc-offer: ${e}`);
     }
-    await peerConnection.setRemoteDescription(sdp);
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
     
-    socket.emit('webrtc-answer', {targetPeerId: targetPeerId, sdp: peerConnection.localDescription});
 });
 
 socket.on('webrtc-answer', async ({ sdp })=>{
-    await peerConnection.setRemoteDescription(sdp)
+    try{
+        if(!peerConnection) return;
+        await peerConnection.setRemoteDescription(sdp);
+    }catch (e){
+        console.log(`error in webrtc-answer: ${e}`);
+    }
+    
 });

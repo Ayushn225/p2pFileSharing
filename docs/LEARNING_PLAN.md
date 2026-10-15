@@ -82,11 +82,65 @@ Send `"hello"` over a data channel.
 - The receiver counts the bytes it has received, and finishes when `received === size`
 > Goal: send a 500 MB file without the tab freezing or crashing.
 
-### M5: UX
-- Progress bars on both sides, plus transfer speed
-- A shareable link like `/?room=abc123`
-- Connection status shown in the UI
-- Sending several files one after another
+### M4.5: Connection cleanup (prerequisite for M5.1)
+
+See "Future checkpoint: connection cleanup + send button state" below for the details.
+
+- `closeConnection(reason)`: null the globals first, then close the old channel and connection; safe to call more than once
+- Call it on `peer-left`, `channel.onclose`, and `connectionState === "failed"` (for `"disconnected"`, only show "reconnecting...")
+- Never tear down on the socket's own `disconnect`: an established WebRTC connection survives a signaling server restart
+- Stale-event guard: each handler checks `pc !== peerConnection` / `channel !== dataChannel` and ignores old connections
+- `sendFile` fails fast if the channel isn't open; queued files show errors instead of hanging
+- Wrap `addIceCandidate` in try/catch (late candidates for an old connection)
+
+### M5.1: Lobby, names, leave, refresh-safe rooms
+
+A WebRTC connection **cannot** survive a page refresh. The goal is to make a refresh *look*
+seamless: save the chat locally, reconnect automatically, and hold the seat for a moment.
+
+Behaviour:
+- No `?roomId` in the URL → lobby: create a room (short random ID, `history.replaceState`) or join one by ID; enter a name; copy-link button
+- Alone → "waiting"; peer present → connect and chat
+- Explicit **Leave room** button with a custom confirm dialog → leaver's local history for that room is cleared, the other side immediately sees a centered "Alice left" bubble
+- The person who stays keeps their whole history; a new joiner starts with a **blank** chat (history is per-browser, never sent to newcomers)
+- Refresh → the same person reconnects within the grace period; the other side sees "reconnecting..." instead of "left"; chat history is restored from local storage
+- `beforeunload` as a safety net (generic browser dialog; custom text isn't allowed and it can't tell refresh from close)
+
+Steps:
+1. **Lobby page** + name field (name kept in `localStorage`)
+2. **Names + system bubbles**: after the channel opens, send `{ type: "hello", name }`; `addSystemMessage` in ui.js for "X joined" / "X left" / "X reconnected"
+   - Centered divider style (`── Alice left ──`) so old and new conversations are clearly separated in the chat body
+   - Generated locally from socket/connection events, never sent over the channel
+   - "Reconnecting…" also goes in the chat body, but **update that same bubble** to "Alice reconnected" or "Alice left" instead of adding a new one each time (a flaky network shouldn't flood the chat)
+3. **Leave button**: confirm → `socket.emit("leave")` → server notifies the room immediately (no grace period) → clear this room's stored history → back to the lobby
+4. **Persist chat**: append each message to `localStorage` under the room ID; render it on page load
+5. **Refresh reconnect + seat reservation**:
+   - `clientId = crypto.randomUUID()` in `sessionStorage` (survives refresh, cleared on tab close); send it with `join`
+   - Server keeps its own `Map` of seats per room (`clientId`, socket id, reserved timer)
+   - Socket disconnect (no explicit leave) → keep the seat reserved for `RECONNECT_GRACE_MS` (5 s) and start a timer
+   - Join with the **same** `clientId` → reclaim the seat, cancel the timer, tell the other peer "reconnected", renegotiate
+   - Join with a **different** `clientId` while a seat is reserved → `"room-busy"` ("try again in a few seconds")
+   - Timer expires → free the seat, emit `peer-left`
+   - Room-size check counts connected **and** reserved seats
+6. *(Optional)* **Persist received files** in IndexedDB (localStorage is too small and string-only), with a per-file size cap; over the cap show "file expired, ask them to resend"
+7. "Clear history" option (privacy on shared computers)
+
+Decisions (kept simple on purpose):
+- Reconnect slower than the 5 s grace period → treated as left + joined again. Acceptable.
+- Seat reservations live in server memory: **soft state**. A server restart forgets them; that only degrades the experience (left/joined instead of "reconnected"), it doesn't break anything, and established WebRTC connections keep working.
+- Same person in two tabs → counted as two people (each tab has its own `sessionStorage` `clientId`). Revisit later: research the BroadcastChannel API / tab leader election.
+
+### M5.2: Progress bar
+
+See "Future checkpoint: file transfer progress bar" below.
+
+### M5.3: Speed
+
+- Measure MB/s with `performance.now()` around `sendFile`
+- Remove any per-chunk work (logs, DOM updates)
+- Dynamic chunk size: `Math.min(peerConnection.sctp.maxMessageSize, 64 * 1024)`
+- Separate `"chat"` and `"file"` data channels so chat never waits behind up to 8 MB of queued chunks (callee tells them apart by `event.channel.label`)
+- Compare numbers before and after each change; test across two machines
 
 ### M6: Stretch goals
 - Test across two different networks (phone hotspot); learn why TURN is sometimes needed
@@ -163,7 +217,10 @@ npm run dev      # http://localhost:3000
 - [x] M2 Peer connection + text
 - [x] M3 Small file
 - [ ] M4 Chunking + backpressure
-- [ ] M5 UX
+- [ ] M4.5 Connection cleanup
+- [ ] M5.1 Lobby, names, leave, refresh-safe rooms
+- [ ] M5.2 Progress bar
+- [ ] M5.3 Speed
 - [ ] M6 Stretch
 - [ ] Future: room waiting queue
 - [ ] Future: connection cleanup + send button state

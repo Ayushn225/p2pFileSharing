@@ -1,23 +1,42 @@
 
 function initPeerConnection(){
-    peerConnection = new RTCPeerConnection(configuration);
+    const pc = new RTCPeerConnection(configuration);
+    peerConnection = pc;
 
-    peerConnection.onicecandidate = async (event)=>{
+    pc.onicecandidate = async (event)=>{
         if(event.candidate && targetPeerId){
             socket.emit('webrtc-ice', {targetPeerId: targetPeerId, candidate: event.candidate});
         }
     }
 
-    peerConnection.ondatachannel = (event)=>{
+    pc.ondatachannel = (event)=>{
         console.log("channel recieved");
         dataChannel = event.channel;
         setupChannel(dataChannel);
     };
 
-    peerConnection.onconnectionstatechange = () =>{
-        console.log("connection: ", peerConnection.connectionState);
-    };
+    pc.onconnectionstatechange = () =>{
+        if(peerConnection !== pc){
+            return;
+        }
 
+        console.log("connection: ", pc.connectionState);
+        const state = pc.connectionState;
+
+        switch(state){
+            case 'failed':
+                closeConnection('failed');
+                break;
+            case 'disconnected':
+                setStatus("reconnecting....")
+                break;
+            case 'connected':
+                setStatus("connected")
+                break;
+            case 'closed':
+                break;
+        }
+    };
 }
 
 function setupChannel(channel){
@@ -32,6 +51,7 @@ function setupChannel(channel){
     }
 
     channel.binaryType = "arraybuffer"
+
     channel.onmessage = (event) =>{
         if(typeof event.data === 'string'){
             // console.log(`recieved ${event.data}`);
@@ -45,6 +65,7 @@ function setupChannel(channel){
             }else if(recieved.type === "file-end"){
                 //signal that its ended
                 // console.log("in the file end");
+                if(!fileMetaData) return;
                 if(recievedBytes !== fileMetaData.size){
                     console.log("mismatch between file and buffer size");
 
@@ -91,6 +112,16 @@ function setupChannel(channel){
         setStatus("connected");
         setChatEnabled(true);
     }
+
+    channel.onclose = () =>{
+        if(channel !== dataChannel){
+            console.warn("⚠️ StaleGuard Triggered: Blocked an old/stale close event from tearing down the new active channel.");
+            return;
+        }
+
+        console.log("✅ Active data channel closed intentionally. Cleaning up state...");
+        closeConnection("closed channel");
+    }
 }
 
 function send(msg){
@@ -105,33 +136,41 @@ function send(msg){
         handleMyMessage(obj);
     }catch(e){
         console.log(e);
+        handleMyMessage({
+            message: `error in sending message`,
+            timestamp: getFormattedTime(),
+            type: 'chat'
+        }, true);
     }
     
 }
 
-function waitForDrain(){
+function waitForDrain(channel){
     return new Promise((resolve, reject) => {
-        dataChannel.onbufferedamountlow = ()=>{
-            dataChannel.onbufferedamountlow = null;
-            dataChannel.removeEventListener("close", onClose);
+        channel.onbufferedamountlow = ()=>{
+            channel.onbufferedamountlow = null;
+            channel.removeEventListener("close", onClose);
             resolve();
         }
 
         const onClose = () => reject(new Error("channel closed"));
-        dataChannel.addEventListener("close", onClose, { once: true });
+        channel.addEventListener("close", onClose, { once: true });
     })
 }
 
 async function sendFile(file){
     try{
+        const channel = dataChannel;
+        if(!channel || channel.readyState !== 'open'){
+            throw new Error("cannot send file channel is not open");
+        }
         const CHUNK_SIZE = 16*1024;
         // const buffer = await file.arrayBuffer();
         const MAX_BUFFER = 8*1024*1024;
-        dataChannel.bufferedAmountLowThreshold = 1024*1024;
-
+        channel.bufferedAmountLowThreshold = 1024*1024;
 
         const timestamp = getFormattedTime();
-        console.log(file);
+        // console.log(file);
         const obj = {
             type: "file-meta",
             name: file.name,
@@ -141,19 +180,19 @@ async function sendFile(file){
         }
         const url = URL.createObjectURL(file);
 
-        dataChannel.send(JSON.stringify(obj));
+        channel.send(JSON.stringify(obj));
 
         handleMyFile(obj, url);
 
         for(let offset = 0; offset<file.size; offset+= CHUNK_SIZE){
-            if(dataChannel.bufferedAmount > MAX_BUFFER){
-                await waitForDrain();
+            if(channel.bufferedAmount > MAX_BUFFER){
+                await waitForDrain(channel);
             }
             const chunk = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
-            dataChannel.send(chunk);
+            channel.send(chunk);
         }
 
-        dataChannel.send(JSON.stringify({type: "file-end"}));
+        channel.send(JSON.stringify({type: "file-end"}));
 
     }catch(e){
         console.log("file send failed");
@@ -171,8 +210,55 @@ function queueFile(file){
             console.log(err);
             handleMyMessage({
                 type: "error",
-                message: `⚠️ error in sending queue`,
+                message: `⚠️ error in sending queue: ${file.name}`,
                 timestamp: getFormattedTime(),
             }, true);
         })
+}
+
+function closeConnection(reason = "disconnected"){
+    const channel = dataChannel;
+    const pc = peerConnection;
+
+    peerConnection = null;
+    dataChannel = null;
+    targetPeerId = null;
+
+    // 1. Close the Data Channel first
+    if (channel) {
+        // Remove event listeners to prevent leaks
+        channel.onmessage = null;
+        channel.onopen = null;
+        channel.onclose = null;
+        channel.onerror = null;
+        
+        if (channel.readyState !== 'closed') {
+            channel.close();
+            console.log("Data channel closed.");
+        }
+    }
+
+    // 2. Stop all media tracks (Audio/Video) attached to the connection if there are
+    if (pc) {
+
+        // 3. Close the Peer Connection
+        // Remove core event listeners
+        pc.onicecandidate = null;
+        pc.ondatachannel = null;
+        pc.oniceconnectionstatechange = null;
+        pc.onsignalingstatechange = null;
+        pc.onconnectionstatechange = null;
+
+        if (pc.signalingState !== 'closed') {
+            pc.close();
+            console.log("Peer connection closed.");
+        }
+    
+    }
+
+    setChatEnabled(false);
+    setStatus(reason);
+
+    console.log(`connection closed due to ${reason}`);
+
 }
