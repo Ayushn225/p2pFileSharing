@@ -1,5 +1,6 @@
 const chatMessages = document.querySelector("#chatMessages");
 const chatbody = document.querySelector(".chat-body");
+const objUrls = new Set();
 
 document.getElementById('copyLinkBtn').addEventListener('click', async function(){
     const btn = this;
@@ -25,6 +26,12 @@ document.getElementById('copyLinkBtn').addEventListener('click', async function(
         }, 2000);
     }
 });
+
+document.getElementById('leaveRoomBtn').addEventListener('click', function(){
+    
+    leaveRoom();
+    clearChat();
+})
 
 function addMessage(text, file, who, url, isError=false){
     const msgDiv = document.createElement("div");
@@ -63,6 +70,7 @@ function addMessage(text, file, who, url, isError=false){
         if(who==="me") downloadLink.classList.add("download-me");
         else downloadLink.classList.add("download-them")
         msgDiv.appendChild(downloadLink);
+        objUrls.add(url);
     }
     
     const timeSpan = document.createElement("span");
@@ -74,6 +82,16 @@ function addMessage(text, file, who, url, isError=false){
     if (chatbody) {
         chatbody.scrollTop = chatbody.scrollHeight;
     }
+}
+
+function clearChat(){
+    chatMessages.replaceChildren();
+
+    objUrls.forEach(url =>{
+        URL.revokeObjectURL(url);
+    })
+
+    objUrls.clear();
 }
 
 function getFormattedTime() {
@@ -197,7 +215,7 @@ function setLobbyError(errorMessage) {
         errorElement.textContent = errorMessage;
         errorElement.style.display = 'block'; // Shows the error
     } else {
-        errorElement.textContent.trim() = '';
+        errorElement.textContent = '';
         errorElement.style.display = 'none';  // Hides the error
     }
 }

@@ -67,6 +67,35 @@ body {
 	opacity: 0.9;
 }
 
+.status-actions {
+	display: flex;
+	gap: 8px; 
+	align-items: center;
+}
+
+.leave-btn {
+	background-color: #f8d7da; 
+	color: #721c24;                
+	border: 1px solid #f5c6cb;     
+	padding: 6px 12px;
+	font-size: 0.85rem;
+	border-radius: 4px;
+	font-weight: 500;
+	cursor: pointer;
+	transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.leave-btn:hover {
+	background-color: #dc3545; 
+	color: #ffffff;                
+	border-color: #dc3545;
+}
+
+
+.leave-btn:active {
+	background-color: #bd2130; 
+}
+
 .chat-messages {
 	display: flex;
 	flex-direction: column;

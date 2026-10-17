@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
             roomIdInputElement.value = "";
             roomIdInputElement.focus();
             alert(`invalid room id`);
+            return;
         }
 
         localStorage.setItem('name', nameValue);

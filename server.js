@@ -52,10 +52,6 @@ io.on("connection", (socket)=>{
         socket.data.targetPeerId = calle;
       }
 
-      // if(!calle){
-        //error message
-      // }
-
       console.log(`another joined room ${roomId}`);
 
       socket.emit("joined", {
@@ -88,6 +84,14 @@ io.on("connection", (socket)=>{
     console.log(`User disconnected: ${socket.id}`);
     if(!roomId) return;
     socket.to(roomId).emit("peer-left", `${socket.id} left the room`);
+  });
+
+  socket.on('leave_room', (roomId)=>{
+    if(!roomId || roomId !== socket.data.roomId) return;
+    socket.leave(roomId);
+    socket.data.roomId = null;
+    socket.data.targetPeerId = null;
+    io.to(roomId).emit('peer-left', `${socket.id} left the room`);
   });
 
 })

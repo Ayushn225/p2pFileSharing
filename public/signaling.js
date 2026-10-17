@@ -51,10 +51,8 @@ socket.on("peer-joined", async (data)=>{
 socket.on("room-full", (data)=>{
     console.log('New room notification:', data);
     // setStatus(data)
-    showView("lobby");
+    leaveReset();
     setLobbyError(data);
-    setLobbyTextError(text);
-    history.replaceState({}, "", location.pathname);
 })
 
 socket.on("peer-left", (data)=>{
@@ -103,3 +101,15 @@ socket.on('webrtc-answer', async ({ sdp })=>{
     }
     
 });
+
+function leaveRoom(){
+    socket.emit('leave_room', currentRoomId);
+    leaveReset();
+    closeConnection("room left");
+}
+
+function leaveReset(){
+    currentRoomId = null;
+    showView("lobby");
+    history.replaceState({}, "", location.pathname);
+}
