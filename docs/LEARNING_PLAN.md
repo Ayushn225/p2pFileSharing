@@ -113,6 +113,8 @@ Steps:
    - Generated locally from socket/connection events, never sent over the channel
    - "Reconnecting…" also goes in the chat body, but **update that same bubble** to "Alice reconnected" or "Alice left" instead of adding a new one each time (a flaky network shouldn't flood the chat)
 3. **Leave button**: confirm → `socket.emit("leave")` → server notifies the room immediately (no grace period) → clear this room's stored history → back to the lobby
+   - ✅ Leave button done (`leave_room` event, chat cleared, back to lobby)
+   - ⏳ **Deferred: leave confirmation.** Start with `confirm("Leave this room? Your chat will be cleared.")` before `leaveRoom()`; later replace it with a styled modal (Leave / Cancel). Also warn via `beforeunload` while a file transfer is in progress
 4. **Persist chat**: append each message to `localStorage` under the room ID; render it on page load
 5. **Refresh reconnect + seat reservation**:
    - `clientId = crypto.randomUUID()` in `sessionStorage` (survives refresh, cleared on tab close); send it with `join`
@@ -225,3 +227,4 @@ npm run dev      # http://localhost:3000
 - [ ] Future: room waiting queue
 - [ ] Future: connection cleanup + send button state
 - [ ] Future: file transfer progress bar
+- [ ] Future: leave confirmation dialog

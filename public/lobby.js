@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (roomFromUrl) {
         if (savedName && savedName.trim() !== "") {
             showView("chat");
-            joinRoom(roomFromUrl);
+            joinRoom(roomFromUrl, savedName);
         } else {
             showView("lobby");
             if (roomIdInputElement) roomIdInputElement.value = roomFromUrl;
@@ -31,11 +31,11 @@ document.addEventListener('DOMContentLoaded', () => {
         let roomValue = roomIdInputElement.value.trim();
 
         if (nameValue === "") {
-            alert("Please write a name");
+            setLobbyError("Please write a name")
             return;
         }
         if (roomValue === "") {
-            alert("Please enter a Room ID");
+            setLobbyError("Please enter a Room ID");
             return;
         }
 
@@ -43,7 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(!checkValidRoom){
             roomIdInputElement.value = "";
             roomIdInputElement.focus();
-            alert(`invalid room id`);
+            setLobbyError(`invalid room id`);
             return;
         }
 
@@ -56,6 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.history.replaceState({}, '', newURL);
 
         showView("chat");
-        joinRoom(roomValue);
+        joinRoom(roomValue, nameValue);
+        setLobbyError(null);
     });
 });

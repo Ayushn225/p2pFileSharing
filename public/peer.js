@@ -1,3 +1,4 @@
+let recconectBubble = null;
 
 function initPeerConnection(){
     const pc = new RTCPeerConnection(configuration);
@@ -25,13 +26,22 @@ function initPeerConnection(){
 
         switch(state){
             case 'failed':
+                if(recconectBubble){
+                    updateSystemMessage(recconectBubble, `Connection Lost`, true);
+                    recconectBubble = null;
+                }else{
+                    updateSystemMessage(null, `Connection to ${peerName?? "Peer"} is lost`, false);
+                }
                 closeConnection('failed');
                 break;
             case 'disconnected':
                 setStatus("reconnecting....")
+                if(!recconectBubble) recconectBubble = updateSystemMessage(null, `${peerName?? "Peer"} is reconnecting...`, false);
                 break;
             case 'connected':
                 setStatus("connected")
+                if(recconectBubble) updateSystemMessage(recconectBubble, `${peerName?? "Peer"} reconnected`, true);
+                recconectBubble = null;
                 break;
             case 'closed':
                 break;
@@ -223,6 +233,8 @@ function closeConnection(reason = "disconnected"){
     peerConnection = null;
     dataChannel = null;
     targetPeerId = null;
+    peerName = null;
+    recconectBubble = null;
 
     // 1. Close the Data Channel first
     if (channel) {

@@ -219,3 +219,32 @@ function setLobbyError(errorMessage) {
         errorElement.style.display = 'none';  // Hides the error
     }
 }
+
+function addSystemMessage(text, setActive = false){
+    const sysMsg = document.createElement('div');
+    sysMsg.innerText = text;
+    sysMsg.classList.add("system-message");
+    if(setActive) sysMsg.classList.add("success");
+
+    chatMessages.append(sysMsg);
+
+    if (chatbody) {
+        chatbody.scrollTop = chatbody.scrollHeight;
+    }
+
+    return sysMsg;
+}
+
+function updateSystemMessage(el, text, setActive = false){
+    if(!el){
+        return addSystemMessage(text, setActive);
+    }
+
+    el.innerText = text;
+    el.classList.remove("success");
+    
+    if(setActive) el.classList.add("success");
+
+    return el;
+
+}

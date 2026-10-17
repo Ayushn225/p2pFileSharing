@@ -21,12 +21,24 @@ io.on("connection", (socket)=>{
   console.log(`User connected: ${socket.id}`);
 
   // 1. Listen for the 'join-room' event from the client
-  socket.on("join", roomId => {
-    console.log(`user ${socket.id} asking for joining ${roomId}`);
+  socket.on("join", (payload) => {
+    if(!payload || typeof payload !== "object") return;
+    const {roomId} = payload;
+    if(typeof roomId != "string" ||  !/^[a-zA-Z0-9-]{1,32}$/.test(roomId)) return;
+
+    let name = typeof payload.name === "string"? payload.name.trim().slice(0, 20): "";
+    console.log(`${name} asking for joining ${roomId}`);
     //check for room
     if (socket.data.roomId === roomId) return; 
+    if(!name) name = "Guest";
+    if(typeof name === 'string'){
+      name = name.trim();
+    }
+
     const room = io.sockets.adapter.rooms.get(roomId);
     const roomSize = room?.size ?? 0;
+
+    socket.data.name = name.slice(0, 20);
     
     if(roomSize >= 2){
       console.log(`room ${roomId} is full`);
@@ -49,20 +61,22 @@ io.on("connection", (socket)=>{
 
       const calle = Array.from(room).at(0);
       if(calle){
-        socket.data.targetPeerId = calle;
+        socket.data.targetPeerId = calle
       }
 
       console.log(`another joined room ${roomId}`);
-
+      
       socket.emit("joined", {
         count: 2,
         message: "welcome",
         targetPeerId: calle,
+        peerName: io.sockets.sockets.get(calle)?.data.name,
       });
 
       socket.to(roomId).emit("peer-joined", {
         message: `${socket.id} joined the room`,
         targetPeerId: socket.id,
+        peerName: socket.data.name,
       });
     }
   });
@@ -83,7 +97,10 @@ io.on("connection", (socket)=>{
     const roomId = socket.data.roomId;
     console.log(`User disconnected: ${socket.id}`);
     if(!roomId) return;
-    socket.to(roomId).emit("peer-left", `${socket.id} left the room`);
+    socket.to(roomId).emit("peer-left", {
+      message: `${socket.id} left the room`,
+      peerName: socket.data.name,
+    });
   });
 
   socket.on('leave_room', (roomId)=>{
@@ -91,7 +108,10 @@ io.on("connection", (socket)=>{
     socket.leave(roomId);
     socket.data.roomId = null;
     socket.data.targetPeerId = null;
-    io.to(roomId).emit('peer-left', `${socket.id} left the room`);
+    io.to(roomId).emit('peer-left',  {
+      message: `${socket.id} left the room`,
+      peerName: socket.data.name,
+    });
   });
 
 })
