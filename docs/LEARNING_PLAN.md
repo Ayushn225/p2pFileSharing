@@ -216,8 +216,8 @@ npm run dev      # http://localhost:3000
 - [x] M1 Signaling server
 - [x] M2 Peer connection + text
 - [x] M3 Small file
-- [ ] M4 Chunking + backpressure
-- [ ] M4.5 Connection cleanup
+- [x] M4 Chunking + backpressure
+- [x] M4.5 Connection cleanup
 - [ ] M5.1 Lobby, names, leave, refresh-safe rooms
 - [ ] M5.2 Progress bar
 - [ ] M5.3 Speed

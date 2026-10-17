@@ -8,42 +8,88 @@
 	</head>
 	<body>
 		<script src="/socket.io/socket.io.js"></script>
+		<script src="ui.js" defer></script>
 		<script src="signaling.js" defer></script>
 		<script src="peer.js" defer></script>
-        <script src="ui.js" defer></script>
+		<script src="lobby.js" defer></script>
 
-		<!-- adding ui -->
-		<div class="chat-body">
-			<p id="status">connecting to server...</p>
-			<div class="chat-messages" id="chatMessages"></div>
-		</div>
-		<form class="input-container">
-			<input
-				type="text"
-				name="message"
-				class="chat-input"
-				placeholder="Type a message..."
-				autocomplete="off"
-			/>
-			<input type="file" id="fileInput" hidden multiple />
-			<label for="fileInput" class="attach-label" aria-label="Attach File"
-				>📎</label
-			>
-			<button type="submit" class="send-btn" aria-label="Send message" disabled>
-				<!-- paper unicorn send sign -->
-				&#10148;
-			</button>
+		<main>
+			<section id="lobby" class="page-section">
+				<div class="lobby-container">
+					<h1>Welcome to Lobby</h1>
+					<p id="lobbyError" style="display: none"></p>
 
-			<div
-				id="fileNameDisplay"
-				class="file-name-container"
-				style="display: none"
-			>
-				<span class="file-text"></span>
-				<button type="button" class="remove-file-btn" id="clearFileBtn">
-					×
-				</button>
-			</div>
-		</form>
+					<form id="lobbyForm" class="lobby-form">
+						<div class="input-group">
+							<label for="userName">Your Name</label>
+							<input
+								type="text"
+								id="userName"
+								placeholder="Enter your name"
+								required
+							/>
+						</div>
+
+						<div class="input-group">
+							<label for="roomId">Room ID</label>
+							<input
+								type="text"
+								id="roomId"
+								placeholder="Enter room ID"
+								required
+							/>
+						</div>
+
+						<button type="submit" class="btn-create">Create Room</button>
+					</form>
+				</div>
+			</section>
+
+			<section id="chat" class="page-section">
+				<!-- adding ui -->
+				<div class="chat-body">
+					<div class="status-container">
+						<p id="status">connecting to server...</p>
+						<button type="button" id="copyLinkBtn" class="copy-btn">
+							Copy Link
+						</button>
+					</div>
+					<div class="chat-messages" id="chatMessages"></div>
+				</div>
+				<form class="input-container">
+					<input
+						type="text"
+						name="message"
+						class="chat-input"
+						placeholder="Type a message..."
+						autocomplete="off"
+					/>
+					<input type="file" id="fileInput" hidden multiple />
+					<label for="fileInput" class="attach-label" aria-label="Attach File"
+						>📎</label
+					>
+					<button
+						type="submit"
+						class="send-btn"
+						aria-label="Send message"
+						disabled
+					>
+						<!-- paper unicorn send sign -->
+						&#10148;
+					</button>
+
+					<div
+						id="fileNameDisplay"
+						class="file-name-container"
+						style="display: none"
+					>
+						<span class="file-text"></span>
+						<button type="button" class="remove-file-btn" id="clearFileBtn">
+							×
+						</button>
+					</div>
+				</form>
+			</section>
+		</main>
 	</body>
 </html>

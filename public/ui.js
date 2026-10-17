@@ -1,6 +1,31 @@
 const chatMessages = document.querySelector("#chatMessages");
 const chatbody = document.querySelector(".chat-body");
 
+document.getElementById('copyLinkBtn').addEventListener('click', async function(){
+    const btn = this;
+    const currUrl = window.location.href;
+
+    try{
+        await navigator.clipboard.writeText(currUrl);
+
+        btn.textContent = 'Copied!';
+        btn.disabled = true;
+
+        setTimeout(()=>{
+            btn.textContent = 'Copy Link';
+            btn.disabled = false;
+        }, 2000);
+    }catch (err){
+        console.error('Failed to copy text: ', err);
+        btn.textContent = 'Error!';
+        
+        setTimeout(() => {
+            btn.textContent = 'Copy Link';
+            btn.disabled = false;
+        }, 2000);
+    }
+});
+
 function addMessage(text, file, who, url, isError=false){
     const msgDiv = document.createElement("div");
     msgDiv.classList.add("msg");
@@ -151,4 +176,28 @@ function setStatus(text){
 
 function setChatEnabled(boolVal){
     document.querySelector(".send-btn").disabled = !boolVal;
+}
+
+function showView(viewName = "lobby"){
+    const lobbySection = document.querySelector("#lobby");
+    const chatSection = document.querySelector("#chat");
+    if(viewName === "lobby"){
+        lobbySection.classList.remove("hidden");
+        chatSection.classList.add("hidden");
+    }else if(viewName === "chat"){
+        lobbySection.classList.add("hidden");
+        chatSection.classList.remove("hidden");
+    }
+}
+
+function setLobbyError(errorMessage) {
+    const errorElement = document.getElementById('lobbyError');
+    
+    if (errorMessage) {
+        errorElement.textContent = errorMessage;
+        errorElement.style.display = 'block'; // Shows the error
+    } else {
+        errorElement.textContent.trim() = '';
+        errorElement.style.display = 'none';  // Hides the error
+    }
 }

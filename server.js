@@ -24,6 +24,7 @@ io.on("connection", (socket)=>{
   socket.on("join", roomId => {
     console.log(`user ${socket.id} asking for joining ${roomId}`);
     //check for room
+    if (socket.data.roomId === roomId) return; 
     const room = io.sockets.adapter.rooms.get(roomId);
     const roomSize = room?.size ?? 0;
     

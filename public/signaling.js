@@ -1,19 +1,25 @@
 const socket = io();
-const queryString = window.location.search;
-const urlParams = new URLSearchParams(queryString); 
-const roomId = urlParams.get('roomId')?? "test"; //added deafult room
 const configuration = { iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
 
 let peerConnection;
 let dataChannel;
 let targetPeerId;
+let currentRoomId = null;
+
+function joinRoom(roomId){
+    currentRoomId = roomId;
+    if (socket.connected) socket.emit('join', currentRoomId);
+}
 
 socket.on("connect", ()=>{
+    if(!currentRoomId) {
+        console.log("no room id");
+        return;
+    }
     console.log('Connected to server with ID:', socket.id);
     // 1. Tell the server we want to join a specific room
-    socket.emit('join', roomId);
+    socket.emit('join', currentRoomId);
 });
-
 
 socket.on('webrtc-ice', async ({candidate})=>{
     try{
@@ -44,7 +50,11 @@ socket.on("peer-joined", async (data)=>{
 
 socket.on("room-full", (data)=>{
     console.log('New room notification:', data);
-    setStatus(data)
+    // setStatus(data)
+    showView("lobby");
+    setLobbyError(data);
+    setLobbyTextError(text);
+    history.replaceState({}, "", location.pathname);
 })
 
 socket.on("peer-left", (data)=>{
