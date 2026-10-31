@@ -30,6 +30,17 @@ if (!/^https?:\/\//.test(base)) {
 const wsBase = base.replace(/^http/, "ws");
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Polls until the condition holds (or the time is up). Networks have latency (a free host can
+// take 300+ ms per round trip), so fixed sleeps make the checks flaky.
+async function waitFor(condition, ms = 8000) {
+  const started = Date.now();
+  while (Date.now() - started < ms) {
+    if (condition()) return true;
+    await wait(25);
+  }
+  return condition();
+}
 let passed = 0;
 let failed = 0;
 function check(condition, message, hint) {
@@ -119,37 +130,44 @@ async function main() {
   }
   check(true, "4 WebSocket clients connected");
 
+  // One round trip tells us how long to wait before concluding "nothing arrived"
+  const t0 = Date.now();
   A.emit("join", { roomId: room, name: "Alice" });
-  await wait(300);
-  B.emit("join", { roomId: room, name: "Bob" });
-  await wait(500);
+  await waitFor(() => A.got("joined").length > 0);
+  const rtt = Date.now() - t0;
+  const quiet = Math.max(600, rtt * 4);
+  console.log(`  INFO  round trip to the server: ~${rtt} ms`);
   check(A.got("joined").some((e) => e.data.count === 1), "first person gets 'waiting' (count 1)");
+
+  B.emit("join", { roomId: room, name: "Bob" });
+  await waitFor(() => B.got("joined").length > 0 && A.got("peer-joined").length > 0);
   const joinedB = B.got("joined").find((e) => e.data.count === 2);
   check(joinedB && joinedB.data.targetPeerId === A.id, "second person is paired with the first");
   check(A.got("peer-joined").some((e) => e.data.targetPeerId === B.id && e.data.peerName === "Bob"), "first person is told who joined");
 
   B.emit("webrtc-offer", { targetPeerId: A.id, sdp: { type: "offer", sdp: "x" } });
-  await wait(300);
+  await waitFor(() => A.got("webrtc-offer").length > 0);
   check(A.got("webrtc-offer").some((e) => e.data.senderId === B.id), "offer is relayed B -> A");
   A.emit("webrtc-answer", { targetPeerId: B.id, sdp: { type: "answer", sdp: "y" } });
-  await wait(300);
+  await waitFor(() => B.got("webrtc-answer").length > 0);
   check(B.got("webrtc-answer").length === 1, "answer is relayed A -> B");
   A.emit("webrtc-ice", { targetPeerId: B.id, candidate: { candidate: "c" } });
-  await wait(300);
+  await waitFor(() => B.got("webrtc-ice").length > 0);
   check(B.got("webrtc-ice").length === 1, "ICE candidate is relayed A -> B");
 
   C.emit("join", { roomId: room, name: "Carol" });
-  await wait(400);
+  await waitFor(() => C.got("room-full").length > 0);
   check(C.got("room-full").length === 1, "a third person is turned away ('room full')");
 
+  // "Nothing should arrive" checks: wait a few round trips, then look
   const before = A.events.length + B.events.length;
   D.emit("webrtc-offer", { targetPeerId: A.id, sdp: { evil: true } });     // D is in no room
   D.emit("webrtc-ice", { targetPeerId: B.id, candidate: { evil: true } });
-  await wait(400);
+  await wait(quiet);
   check(A.events.length + B.events.length === before, "an outsider cannot inject signals into the room");
 
   D.emit("webrtc-ice");                                                    // malformed on purpose
-  await wait(300);
+  await wait(quiet);
   const health = await fetch(`${base}/healthz`).then((r) => r.ok).catch(() => false);
   check(health, "server survives a malformed message");
 

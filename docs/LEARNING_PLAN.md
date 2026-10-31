@@ -148,7 +148,7 @@ See "Future checkpoint: file transfer progress bar" below.
 - Separate `"chat"` and `"file"` data channels so chat never waits behind up to 8 MB of queued chunks (callee tells them apart by `event.channel.label`)
 - Compare numbers before and after each change; test across two machines
 
-### M7: Ship v1 (deployable prototype) ← do this right after M5.2
+### M7: Ship v1 (deployable prototype) ✅
 
 Goal: a working prototype on a free host that two people on different networks can use.
 
@@ -168,13 +168,13 @@ Fix first (found while scanning the code on 2026-10-27):
 - [x] **Smoke test** (`npm run smoke -- <url>`) and [docs/DEPLOY.md](DEPLOY.md) with the pre-deploy checklist and the phone -> laptop test
 
 Deploy:
-- [ ] Pick a host that runs a long-lived Node process with WebSockets (Render, Railway, Koyeb, Fly.io). **Not** Vercel / Netlify / GitHub Pages
-- [ ] Build `npm install`, start `npm start`; the port comes from `process.env.PORT` (already in server.js)
-- [ ] Open the HTTPS URL on a laptop and a phone on cellular (different networks)
+- [x] Pick a host that runs a long-lived Node process with WebSockets (Render, Railway, Koyeb, Fly.io). **Not** Vercel / Netlify / GitHub Pages
+- [x] Build `npm install`, start `npm start`; the port comes from `process.env.PORT` (already in server.js)
+- [x] Open the HTTPS URL on a laptop and a phone (phone <-> laptop file transfer verified on https://p2pfilesharing.onrender.com)
 - [ ] If it stays on "connecting…" → add a hosted TURN server to `iceServers` and re-test
 
 Ship:
-- [ ] README: live URL, "Known limitations" (refresh shows left/joined, ~500 MB file cap, two people per room, STUN/TURN notes)
+- [x] README: live URL, "Known limitations" (refresh shows left/joined, ~500 MB file cap, two people per room, STUN/TURN notes)
 - [ ] Tick the roadmap, commit, push
 
 ### M6: Stretch goals
@@ -257,7 +257,7 @@ npm run dev      # http://localhost:3000
 - [ ] M5.1 step 5: refresh-safe seat reservation (v1.1)
 - [ ] M5.1 steps 6–7: persisted files, clear history (v1.1)
 - [x] M5.2 Progress bar (tested in two real browsers)
-- [ ] M7 Ship v1: code fixes done; deploy + phone test left (see docs/DEPLOY.md) ← NEXT
+- [x] M7 Ship v1 (deployed on Render, phone <-> laptop file transfer verified)
 - [ ] M5.3 Speed (v1.1)
 - [ ] M6 Stretch
 - [x] Future: connection cleanup + send button state (done as M4.5)
