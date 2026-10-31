@@ -48,7 +48,12 @@ socket.on("peer-joined", async (data)=>{
         setStatus(data.message);
         targetPeerId = data.targetPeerId;
         peerName = data.peerName;
-        addSystemMessage(`${peerName} joined`, true);
+        updateSystemMessage(null, `${peerName} joined`, true);
+        saveRecord({
+            kind: "system",
+            text: `${peerName} joined`,
+            setActive: true,
+        }, currentRoomId, currentName)
         initPeerConnection();
 
         dataChannel = peerConnection.createDataChannel("file");
@@ -65,6 +70,7 @@ socket.on("peer-joined", async (data)=>{
 socket.on("room-full", (data)=>{
     console.log('New room notification:', data);
     // setStatus(data)
+    chatHistory = [];
     leaveReset();
     setLobbyError(data);
 })
@@ -72,12 +78,18 @@ socket.on("room-full", (data)=>{
 socket.on("peer-left", (data)=>{
     console.log('New room notification:', data.message);
 
-    if(recconectBubble) {
-        updateSystemMessage(recconectBubble, `${data.peerName} left`, false);
-        recconectBubble = null;
+    if(reconnectBubble) {
+        updateSystemMessage(reconnectBubble, `${data.peerName} left`, false);
     }else{
         updateSystemMessage(null,  `${data.peerName} left`, false);
     }
+
+    saveRecord({
+        kind: "system",
+        text: `${data.peerName} left`,
+        setActive: false,
+    }, currentRoomId, currentName);
+
     closeConnection("peer left, waiting...");
 });
 
@@ -92,7 +104,13 @@ socket.on("joined", (data)=>{
         initPeerConnection();
         peerName = data.peerName;
 
-        updateSystemMessage(null, `${peerName?? "Peer"} joined`);
+        updateSystemMessage(null, `${peerName?? "Peer"} joined`, true);
+
+        saveRecord({
+            kind: "system",
+            text: `${peerName?? "Peer"} joined`,
+            setActive: true,
+        }, currentRoomId, currentName)
     }
 });
 
@@ -128,6 +146,7 @@ socket.on('webrtc-answer', async ({ sdp })=>{
 
 function leaveRoom(){
     socket.emit('leave_room', currentRoomId);
+    clearRecord(currentRoomId, currentName);
     leaveReset();
     closeConnection("room left");
 }

@@ -50,19 +50,19 @@ Read the samples. Don't copy them.
 
 Each milestone should **work on its own** before you start the next one. Commit after each.
 
-### M0: Local loopback (no server)
+### M0: Local loopback (no server) ✅
 Create **two** `RTCPeerConnection`s on the same page and connect them to each
 other by hand (pass the offer, answer and ICE candidates directly in code).
 Send `"hello"` over a data channel.
 > Goal: understand the offer/answer/ICE dance with no networking getting in the way.
 
-### M1: Signaling server
+### M1: Signaling server ✅
 - `server.js`: Express serves `public/`, and Socket.IO is attached to the same HTTP server
 - Rooms: a user joins a room ID; the server relays `offer`, `answer` and `ice-candidate` messages to the other peer in that room
 - The server **never looks at** the payload. It only forwards it.
 > Goal: two tabs log "peer joined" for each other.
 
-### M2: Real peer connection over signaling
+### M2: Real peer connection over signaling ✅
 - Decide who is the **caller** (for example, the second person to join) and who is the **callee**
 - Caller: `createDataChannel` → `createOffer` → send it
 - Callee: receive offer → `createAnswer` → send it; use `ondatachannel` to get the channel
@@ -70,19 +70,19 @@ Send `"hello"` over a data channel.
 - Add a STUN server: `{ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }`
 > Goal: send a text chat message between two tabs.
 
-### M3: Send a small file
+### M3: Send a small file ✅
 - Send metadata first as JSON: `{ type: "meta", name, size, mimeType }`
 - Then send the whole file as one `ArrayBuffer` (only works for small files)
 - The receiver builds a Blob and shows a download link
 > Goal: send a 100 KB image.
 
-### M4: Chunking + backpressure (the hard part)
+### M4: Chunking + backpressure (the hard part) ✅
 - Split the file into chunks of about 16 KB
 - Only send while `bufferedAmount` is below a threshold; otherwise wait for `onbufferedamountlow`
 - The receiver counts the bytes it has received, and finishes when `received === size`
 > Goal: send a 500 MB file without the tab freezing or crashing.
 
-### M4.5: Connection cleanup (prerequisite for M5.1)
+### M4.5: Connection cleanup (prerequisite for M5.1) ✅
 
 See "Future checkpoint: connection cleanup + send button state" below for the details.
 
@@ -107,16 +107,20 @@ Behaviour:
 - `beforeunload` as a safety net (generic browser dialog; custom text isn't allowed and it can't tell refresh from close)
 
 Steps:
-1. **Lobby page** + name field (name kept in `localStorage`)
-2. **Names + system bubbles**: after the channel opens, send `{ type: "hello", name }`; `addSystemMessage` in ui.js for "X joined" / "X left" / "X reconnected"
+1. ✅ **Lobby page** + name field (name kept in `localStorage`)
+   - Done: lobby form, name in `localStorage`, `?room=` URL, copy-link button, room-ID validation, room-full → back to the lobby with an error
+   - Still open: a "Create room" button that generates an unguessable random ID (see M7)
+2. ✅ **Names + system bubbles**: names travel in the `join` payload (instead of a `hello` message); `addSystemMessage` in ui.js for "X joined" / "X left" / "X reconnected"
    - Centered divider style (`── Alice left ──`) so old and new conversations are clearly separated in the chat body
    - Generated locally from socket/connection events, never sent over the channel
    - "Reconnecting…" also goes in the chat body, but **update that same bubble** to "Alice reconnected" or "Alice left" instead of adding a new one each time (a flaky network shouldn't flood the chat)
-3. **Leave button**: confirm → `socket.emit("leave")` → server notifies the room immediately (no grace period) → clear this room's stored history → back to the lobby
+3. ✅ **Leave button**: confirm → `socket.emit("leave")` → server notifies the room immediately (no grace period) → clear this room's stored history → back to the lobby
    - ✅ Leave button done (`leave_room` event, chat cleared, back to lobby)
    - ⏳ **Deferred: leave confirmation.** Start with `confirm("Leave this room? Your chat will be cleared.")` before `leaveRoom()`; later replace it with a styled modal (Leave / Cancel). Also warn via `beforeunload` while a file transfer is in progress
-4. **Persist chat**: append each message to `localStorage` under the room ID; render it on page load
-5. **Refresh reconnect + seat reservation**:
+4. ✅ **Persist chat**: append each message to `localStorage` under the room ID; render it on page load
+   - Done: `storage.js` (`saveRecord` / `loadRecord` / `clearRecord`), draw-only UI functions, saves at the source, restore on the `?room=` refresh path
+   - Open bug: restore is commented out on the lobby submit path (see M7)
+5. ⏳ *(v1.1)* **Refresh reconnect + seat reservation**:
    - `clientId = crypto.randomUUID()` in `sessionStorage` (survives refresh, cleared on tab close); send it with `join`
    - Server keeps its own `Map` of seats per room (`clientId`, socket id, reserved timer)
    - Socket disconnect (no explicit leave) → keep the seat reserved for `RECONNECT_GRACE_MS` (5 s) and start a timer
@@ -124,15 +128,15 @@ Steps:
    - Join with a **different** `clientId` while a seat is reserved → `"room-busy"` ("try again in a few seconds")
    - Timer expires → free the seat, emit `peer-left`
    - Room-size check counts connected **and** reserved seats
-6. *(Optional)* **Persist received files** in IndexedDB (localStorage is too small and string-only), with a per-file size cap; over the cap show "file expired, ask them to resend"
-7. "Clear history" option (privacy on shared computers)
+6. ⏳ *(Optional, v1.1)* **Persist received files** in IndexedDB (localStorage is too small and string-only), with a per-file size cap; over the cap show "file expired, ask them to resend"
+7. ⏳ *(v1.1)* "Clear history" option (privacy on shared computers)
 
 Decisions (kept simple on purpose):
 - Reconnect slower than the 5 s grace period → treated as left + joined again. Acceptable.
 - Seat reservations live in server memory: **soft state**. A server restart forgets them; that only degrades the experience (left/joined instead of "reconnected"), it doesn't break anything, and established WebRTC connections keep working.
 - Same person in two tabs → counted as two people (each tab has its own `sessionStorage` `clientId`). Revisit later: research the BroadcastChannel API / tab leader election.
 
-### M5.2: Progress bar
+### M5.2: Progress bar (implemented 2026-10-31, needs a real-browser test) ← NEXT
 
 See "Future checkpoint: file transfer progress bar" below.
 
@@ -144,12 +148,37 @@ See "Future checkpoint: file transfer progress bar" below.
 - Separate `"chat"` and `"file"` data channels so chat never waits behind up to 8 MB of queued chunks (callee tells them apart by `event.channel.label`)
 - Compare numbers before and after each change; test across two machines
 
+### M7: Ship v1 (deployable prototype) ← do this right after M5.2
+
+Goal: a working prototype on a free host that two people on different networks can use.
+
+Fix first (found while scanning the code on 2026-10-27):
+- [x] **server.js crashes on start**: `path` is used on line 9 but never required → add `const path = require("path");`
+- [x] **lobby.js, submit path**: `renderRecord` is commented out. Call `renderRecord(roomValue, nameValue)` **before** `joinRoom(roomValue, nameValue)`; otherwise the first new message overwrites the room's stored history, or writes the previous room's history under the new key
+- [x] **signaling.js, `room-full`**: also reset the in-memory chat (`chatHistory = []; clearChat();`), without deleting stored history
+- [x] **storage.js**: `data = JSON.parse(...)` in `loadRecord` is an implicit global → `const data`; drop the duplicated `roomId`/`name` guards
+- [x] **server.js signal relay**: before forwarding `webrtc-offer` / `-answer` / `-ice`, check that the target socket exists and has the same `data.roomId` as the sender
+- [ ] **Random room IDs**: a "Create room" button that generates an unguessable ID (10+ random characters)
+- [ ] **File size cap** (about 500 MB, the receiver holds the file in memory): refuse on the sender, and reject oversized / malformed `file-meta` on the receiver
+- [ ] **Mobile CSS pass**: `100dvh` instead of `100vh`, tap targets, file badge position
+- [ ] `package.json`: add `"engines": { "node": ">=18" }`
+
+Deploy:
+- [ ] Pick a host that runs a long-lived Node process with WebSockets (Render, Railway, Koyeb, Fly.io). **Not** Vercel / Netlify / GitHub Pages
+- [ ] Build `npm install`, start `npm start`; the port comes from `process.env.PORT` (already in server.js)
+- [ ] Open the HTTPS URL on a laptop and a phone on cellular (different networks)
+- [ ] If it stays on "connecting…" → add a hosted TURN server to `iceServers` and re-test
+
+Ship:
+- [ ] README: live URL, "Known limitations" (refresh shows left/joined, ~500 MB file cap, two people per room, STUN/TURN notes)
+- [ ] Tick the roadmap, commit, push
+
 ### M6: Stretch goals
-- Test across two different networks (phone hotspot); learn why TURN is sometimes needed
+- Test across two different networks (phone hotspot); learn why TURN is sometimes needed (first pass is in M7)
 - Pause/resume, cancel
 - Check file integrity with a hash (`crypto.subtle.digest`)
 - Drag-and-drop
-- Deploy it (it needs HTTPS for anything other than localhost)
+- Deploy it (moved to M7: it needs HTTPS for anything other than localhost)
 
 ### Future checkpoint: room waiting queue
 
@@ -163,7 +192,7 @@ When someone leaves, the next person in the queue joins automatically.
 - Edge case: someone *in the queue* disconnects → remove them (track it with `socket.data.queuedFor`)
 - WebRTC: the remaining peer must close its old `RTCPeerConnection` and create a new one for the new peer
 
-### Future checkpoint: connection cleanup + send button state
+### Future checkpoint: connection cleanup + send button state ✅ (done as M4.5)
 
 Right now the send button stays enabled after the peer leaves. When the other tab
 closes, `peer-left` arrives instantly over the socket, but WebRTC notices slowly
@@ -220,11 +249,14 @@ npm run dev      # http://localhost:3000
 - [x] M3 Small file
 - [x] M4 Chunking + backpressure
 - [x] M4.5 Connection cleanup
-- [ ] M5.1 Lobby, names, leave, refresh-safe rooms
-- [ ] M5.2 Progress bar
-- [ ] M5.3 Speed
+- [x] M5.1 steps 1–4: lobby, names + system bubbles, leave button, persisted chat
+- [ ] M5.1 step 5: refresh-safe seat reservation (v1.1)
+- [ ] M5.1 steps 6–7: persisted files, clear history (v1.1)
+- [ ] M5.2 Progress bar: implemented in ui.js + peer.js, verify in two real browsers ← NEXT
+- [ ] M7 Ship v1 (fixes, deploy, TURN if needed, README) ← then this
+- [ ] M5.3 Speed (v1.1)
 - [ ] M6 Stretch
-- [ ] Future: room waiting queue
-- [ ] Future: connection cleanup + send button state
-- [ ] Future: file transfer progress bar
+- [x] Future: connection cleanup + send button state (done as M4.5)
+- [ ] Future: file transfer progress bar (= M5.2)
 - [ ] Future: leave confirmation dialog
+- [ ] Future: room waiting queue

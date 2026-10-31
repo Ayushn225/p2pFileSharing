@@ -4,8 +4,9 @@ Send files directly from one browser to another using **WebRTC**. A small
 Node.js server introduces the two peers. After that, data flows peer to peer
 and never touches the server.
 
-> 🚧 **Work in progress.** Two browsers can connect, chat, and send small files
-> over a direct WebRTC data channel. Large files need chunking, which is next.
+> 🚧 **Work in progress.** Two browsers can join a room, chat, and send files of any
+> size over a direct WebRTC data channel (chunked, with backpressure). A progress bar
+> and a public deployment are next.
 
 ## How it works
 
@@ -15,7 +16,7 @@ and never touches the server.
      └────────────────── RTCDataChannel (direct, encrypted) ──────────────┘
 ```
 
-1. Both users open the same room link (`/?roomId=abc`). A room holds at most 2 people.
+1. Both users enter a name and the same room ID in the lobby (the link becomes `/?room=abc`). A room holds at most 2 people.
 2. The **signaling server** (Express + Socket.IO) tells the waiting peer that someone joined.
 3. The waiting peer (the **caller**) creates a data channel and an SDP **offer**. The newcomer (the **callee**) replies with an **answer**.
 4. Both peers exchange **ICE candidates** (network addresses, found with a STUN server) through the server.
@@ -38,17 +39,21 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000/?roomId=test` in **two** browser tabs. Open DevTools in
-each tab: both should log `connection: connected`, then a `hello` message from the other tab.
+Open `http://localhost:3000` in **two** browser tabs, enter a different name in each and
+the same room ID. When the status shows "connected" you can chat and attach files.
+(Use two different names while testing in one browser: chat history is saved per room and name.)
 
 ## Project structure
 
 ```
 server.js            Express static server + Socket.IO signaling (rooms, offer/answer/ICE relay)
 public/
-  index.html         UI
+  index.html         Lobby + chat views
+  lobby.js           Lobby form, name/room validation, `?room=` handling
   signaling.js       Socket.IO client: rooms, offer/answer/ICE exchange
-  peer.js            Peer connection, data channel, chat and file send/receive
+  peer.js            Peer connection, data channel, chunked file transfer, send queue
+  ui.js              All DOM code: chat bubbles, system messages, file badge, views
+  storage.js         Chat history saved per room in localStorage
   app.js             Early experiment: two peers connected in a single tab (loopback)
 docs/
   LEARNING_PLAN.md   Concepts to learn and the detailed milestone plan
@@ -61,9 +66,15 @@ docs/
 - [x] Peer connection across two tabs, text over a data channel
 - [x] Text chat over the data channel
 - [x] Send a small file (metadata + single buffer, image preview, download link)
-- [ ] Chunking + backpressure for large files
-- [ ] UX: progress bar, transfer speed, shareable room link
-- [ ] Stretch: TURN server, pause/resume, integrity hash, drag-and-drop, deployment
+- [x] Chunking + backpressure for large files
+- [x] Sequential send queue (several files at once)
+- [x] Connection cleanup (stale-event guards, safe reconnects)
+- [x] Lobby, names, shareable room link, Leave button
+- [x] System messages (joined / left / reconnecting) and chat history that survives a refresh
+- [ ] Transfer progress bar
+- [ ] Deployment (HTTPS, free host) and a TURN server for strict networks
+- [ ] Refresh-safe seat reservation (no "left / joined" flicker on refresh)
+- [ ] Stretch: transfer speed, pause/resume, integrity hash, drag-and-drop
 - [ ] Waiting queue for full rooms
 
 ## Debugging tips

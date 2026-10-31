@@ -1,4 +1,4 @@
-let recconectBubble = null;
+let reconnectBubble = null;
 
 function initPeerConnection(){
     const pc = new RTCPeerConnection(configuration);
@@ -26,22 +26,27 @@ function initPeerConnection(){
 
         switch(state){
             case 'failed':
-                if(recconectBubble){
-                    updateSystemMessage(recconectBubble, `Connection Lost`, true);
-                    recconectBubble = null;
+                if(reconnectBubble){
+                    updateSystemMessage(reconnectBubble, `Connection Lost`, false);
+                    reconnectBubble = null;
                 }else{
                     updateSystemMessage(null, `Connection to ${peerName?? "Peer"} is lost`, false);
+                    saveRecord({
+                        kind: "system",
+                        text: `Connection to ${peerName?? "Peer"} is lost`,
+                        setActive: false,
+                    }, currentRoomId, currentName);
                 }
                 closeConnection('failed');
                 break;
             case 'disconnected':
                 setStatus("reconnecting....")
-                if(!recconectBubble) recconectBubble = updateSystemMessage(null, `${peerName?? "Peer"} is reconnecting...`, false);
+                if(!reconnectBubble) reconnectBubble = updateSystemMessage(null, `${peerName?? "Peer"} is reconnecting...`, false);
                 break;
             case 'connected':
                 setStatus("connected")
-                if(recconectBubble) updateSystemMessage(recconectBubble, `${peerName?? "Peer"} reconnected`, true);
-                recconectBubble = null;
+                if(reconnectBubble) updateSystemMessage(reconnectBubble, `${peerName?? "Peer"} reconnected`, true);
+                reconnectBubble = null;
                 break;
             case 'closed':
                 break;
@@ -60,6 +65,23 @@ function setupChannel(channel){
         recievedBytes = 0;
     }
 
+    // Small replies (ack / error) must never throw inside onmessage.
+    function reply(obj){
+        try{
+            channel.send(JSON.stringify(obj));
+        }catch(e){
+            console.log("could not reply:", e);
+        }
+    }
+
+    // The incoming file can't be completed: fail our bubble, tell the sender which file, start clean.
+    function rejectIncomingFile(reason){
+        const id = fileMetaData.id;
+        failTransfer(id, reason);
+        reply({type: "file-error", id, reason});
+        resetReceive();
+    }
+
     channel.binaryType = "arraybuffer"
 
     channel.onmessage = (event) =>{
@@ -69,33 +91,31 @@ function setupChannel(channel){
             
             if(recieved.type === "chat") handleTheirMessage(recieved);
             else if(recieved.type==="file-meta"){
-                // console.log("in the file meta");
+                // a new file while another is unfinished: the old one is abandoned
+                if(fileMetaData) failTransfer(fileMetaData.id, "Interrupted");
                 resetReceive();
                 fileMetaData = recieved;
+                handleTheirFile(recieved);      // bubble appears, receiving 0%
             }else if(recieved.type === "file-end"){
-                //signal that its ended
-                // console.log("in the file end");
-                if(!fileMetaData) return;
-                if(recievedBytes !== fileMetaData.size){
-                    console.log("mismatch between file and buffer size");
+                if(!fileMetaData || recieved.id !== fileMetaData.id) return;
 
-                    channel.send(JSON.stringify({
-                        type: "error",
-                        message: `⚠️ error in sending ${fileMetaData.name}`,
-                        timestamp: getFormattedTime(),
-                    }));
-                    resetReceive();
+                if(recievedBytes !== fileMetaData.size){
+                    rejectIncomingFile("File was incomplete");
                     return;
                 }
 
                 const blob = new Blob(chunks, {type: fileMetaData.mimeType});
                 const url = URL.createObjectURL(blob);
-                // console.log(url);
-                handleTheirFile(fileMetaData, url);
+                finishTransfer(fileMetaData.id, url);
+                reply({type: "file-ack", id: fileMetaData.id});
                 resetReceive();
 
-            }else if(recieved.type==="error"){
-                handleMyMessage(recieved, true);
+            }else if(recieved.type === "file-ack"){
+                // sender side: the receiver has the whole file
+                finishTransfer(recieved.id);
+            }else if(recieved.type === "file-error"){
+                // sender side: the receiver could not complete this file
+                failTransfer(recieved.id, recieved.reason || "Receiver could not complete the transfer");
             }
         }else if(event.data instanceof ArrayBuffer || event.data instanceof Blob){
             // console.log("in the file buffer recieving");
@@ -111,9 +131,11 @@ function setupChannel(channel){
             recievedBytes += event.data.byteLength;
             if(recievedBytes > fileMetaData.size){
                 console.error("recievedBye is greater than expected");
-                resetReceive();
+                rejectIncomingFile("File was larger than announced");
                 return;
             }
+
+            updateProgress(fileMetaData.id, percentOf(recievedBytes, fileMetaData.size));
         }
     }
 
@@ -168,61 +190,87 @@ function waitForDrain(channel){
     })
 }
 
-async function sendFile(file){
+let FILE_COUNTER = 0;
+
+// Unique per sender, so both peers can send at the same time without clashing.
+function newTransferId(){
+    FILE_COUNTER += 1;
+    return `${socket.id}-${FILE_COUNTER}`;
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function percentOf(done, total){
+    return total > 0 ? (done / total) * 100 : 100;     // empty file = already complete
+}
+
+// Throws on failure: the queue below turns that into a "failed" bubble.
+async function sendFile(file, meta){
+    const channel = dataChannel;
+    if(!channel || channel.readyState !== 'open'){
+        throw new Error("cannot send file channel is not open");
+    }
+    const CHUNK_SIZE = 16*1024;
+    const MAX_BUFFER = 8*1024*1024;
+    channel.bufferedAmountLowThreshold = 1024*1024;
+
+    channel.send(JSON.stringify(meta));
+    updateProgress(meta.id, 0);                         // waiting -> sending
+
+    // The loop below sleeps while the buffer drains, so it can't drive the bar by itself
+    // (it would freeze, then jump ~7 MB at a time). A timer reads bufferedAmount instead:
+    //   handed to the channel - still queued = actually on the wire.
+    let handed = 0;
+    const tick = setInterval(() => {
+        updateProgress(meta.id, percentOf(handed - channel.bufferedAmount, file.size));
+    }, 150);
+
     try{
-        const channel = dataChannel;
-        if(!channel || channel.readyState !== 'open'){
-            throw new Error("cannot send file channel is not open");
-        }
-        const CHUNK_SIZE = 16*1024;
-        // const buffer = await file.arrayBuffer();
-        const MAX_BUFFER = 8*1024*1024;
-        channel.bufferedAmountLowThreshold = 1024*1024;
-
-        const timestamp = getFormattedTime();
-        // console.log(file);
-        const obj = {
-            type: "file-meta",
-            name: file.name,
-            size: file.size,
-            mimeType: file.type,
-            timestamp: timestamp
-        }
-        const url = URL.createObjectURL(file);
-
-        channel.send(JSON.stringify(obj));
-
-        handleMyFile(obj, url);
-
         for(let offset = 0; offset<file.size; offset+= CHUNK_SIZE){
             if(channel.bufferedAmount > MAX_BUFFER){
                 await waitForDrain(channel);
             }
             const chunk = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
             channel.send(chunk);
+            handed = offset + chunk.byteLength;
         }
 
-        channel.send(JSON.stringify({type: "file-end"}));
-
-    }catch(e){
-        console.log("file send failed");
-        console.log(e);
-        throw e;
+        // let the queue empty first, so 100% really means "everything is on the wire"
+        while(channel.readyState === 'open' && channel.bufferedAmount > 0){
+            await wait(50);
+        }
+        if(channel.readyState !== 'open'){
+            throw new Error("channel closed while sending");
+        }
+    }finally{
+        clearInterval(tick);
     }
+
+    updateProgress(meta.id, 100);
+    channel.send(JSON.stringify({type: "file-end", id: meta.id}));
+    // no "done" here: the bubble turns "Delivered" when the receiver's file-ack arrives
 }
 
 let sendQueue = Promise.resolve();
 
 function queueFile(file){
+    const meta = {
+        type: "file-meta",
+        id: newTransferId(),
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+        timestamp: getFormattedTime(),
+    };
+
+    // the bubble shows up immediately ("waiting") while earlier files are still sending
+    handleMyFile(meta, URL.createObjectURL(file));
+
     sendQueue = sendQueue
-        .then(() => sendFile(file))
+        .then(() => sendFile(file, meta))
         .catch((err)=>{
             console.log(err);
-            handleMyMessage({
-                type: "error",
-                message: `⚠️ error in sending queue: ${file.name}`,
-                timestamp: getFormattedTime(),
-            }, true);
+            failTransfer(meta.id, "Failed to send");
         })
 }
 
@@ -234,7 +282,9 @@ function closeConnection(reason = "disconnected"){
     dataChannel = null;
     targetPeerId = null;
     peerName = null;
-    recconectBubble = null;
+    reconnectBubble = null;
+
+    failAllTransfers("Connection lost");
 
     // 1. Close the Data Channel first
     if (channel) {

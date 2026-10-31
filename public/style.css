@@ -12,7 +12,7 @@ body {
 	font-family: Arial, sans-serif;
 	display: flex;
 	flex-direction: column;
-	height: 100vh;
+	height: 100dvh;
 	background-color: #f4f4f9;
 	padding: 5%;
 }
@@ -342,4 +342,40 @@ h1 {
 	font-size: 0.95rem;
 	font-weight: 500;
 	text-align: left;
+}
+
+/* ---- File transfer bubbles (see createTransferBubble in ui.js) ---- */
+.msg-body {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.transfer-title {
+	font-weight: 600;
+	word-break: break-all;
+}
+
+.transfer-status {
+	font-size: 0.8em;
+	opacity: 0.85;
+}
+
+.transfer-progress {
+	width: 100%;
+	min-width: 200px;
+	height: 8px;
+	margin-top: 6px;
+	accent-color: #34c759;
+}
+
+.message-me .transfer-progress {
+	accent-color: #ffffff;
+}
+
+/* soft red instead of the solid .message-error block */
+.msg.transfer-failed {
+	background-color: #fdecea;
+	color: #b3261e;
+	border: 1px solid #f5c2c0;
 }

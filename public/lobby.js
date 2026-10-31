@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (roomFromUrl) {
         if (savedName && savedName.trim() !== "") {
             showView("chat");
+            renderRecord(roomFromUrl, savedName);
             joinRoom(roomFromUrl, savedName);
         } else {
             showView("lobby");
@@ -56,6 +57,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.history.replaceState({}, '', newURL);
 
         showView("chat");
+        renderRecord(roomValue, nameValue);
         joinRoom(roomValue, nameValue);
         setLobbyError(null);
     });
