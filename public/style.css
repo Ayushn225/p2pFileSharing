@@ -379,3 +379,30 @@ h1 {
 	color: #b3261e;
 	border: 1px solid #f5c2c0;
 }
+
+/* ---- Lobby: room ID row with the "Generate" button ---- */
+.room-row {
+	display: flex;
+	gap: 8px;
+}
+
+.room-row input {
+	flex: 1;
+	min-width: 0;
+}
+
+.btn-secondary {
+	background-color: #eef2f7;
+	color: #333;
+	border: 2px solid #e2e8f0;
+	border-radius: 8px;
+	padding: 0 14px;
+	font-size: 14px;
+	font-weight: 600;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.btn-secondary:hover {
+	background-color: #e2e8f0;
+}

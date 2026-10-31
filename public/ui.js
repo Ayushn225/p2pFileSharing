@@ -127,7 +127,7 @@ function getFormattedSize(size){
     const suff = ['B', 'KB', 'MB', 'GB', 'TB'];
     let sz = size;
     let i = 0;
-    while(sz>1024 && i<suff.length-1){
+    while(sz>=1024 && i<suff.length-1){
         sz = sz/1024
         i++;
     }

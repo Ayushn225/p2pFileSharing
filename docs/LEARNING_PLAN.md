@@ -136,7 +136,7 @@ Decisions (kept simple on purpose):
 - Seat reservations live in server memory: **soft state**. A server restart forgets them; that only degrades the experience (left/joined instead of "reconnected"), it doesn't break anything, and established WebRTC connections keep working.
 - Same person in two tabs → counted as two people (each tab has its own `sessionStorage` `clientId`). Revisit later: research the BroadcastChannel API / tab leader election.
 
-### M5.2: Progress bar (implemented 2026-10-31, needs a real-browser test) ← NEXT
+### M5.2: Progress bar ✅
 
 See "Future checkpoint: file transfer progress bar" below.
 
@@ -158,10 +158,14 @@ Fix first (found while scanning the code on 2026-10-27):
 - [x] **signaling.js, `room-full`**: also reset the in-memory chat (`chatHistory = []; clearChat();`), without deleting stored history
 - [x] **storage.js**: `data = JSON.parse(...)` in `loadRecord` is an implicit global → `const data`; drop the duplicated `roomId`/`name` guards
 - [x] **server.js signal relay**: before forwarding `webrtc-offer` / `-answer` / `-ice`, check that the target socket exists and has the same `data.roomId` as the sender
-- [ ] **Random room IDs**: a "Create room" button that generates an unguessable ID (10+ random characters)
-- [ ] **File size cap** (about 500 MB, the receiver holds the file in memory): refuse on the sender, and reject oversized / malformed `file-meta` on the receiver
-- [ ] **Mobile CSS pass**: `100dvh` instead of `100vh`, tap targets, file badge position
-- [ ] `package.json`: add `"engines": { "node": ">=18" }`
+- [x] **Random room IDs**: a "Create room" button that generates an unguessable ID (10+ random characters)
+- [x] **File size cap** (about 500 MB, the receiver holds the file in memory): refuse on the sender, and reject oversized / malformed `file-meta` on the receiver
+- [ ] **Mobile CSS pass**: `100dvh` instead of `100vh` (done); tap targets and the file badge position still to check on a phone
+- [x] `package.json`: add `"engines": { "node": ">=18" }`
+- [x] **ICE candidate queue** (`signaling.js`): early candidates are kept until the offer/answer is applied instead of being dropped
+- [x] **TURN support**: `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` env vars -> `/ice-config`; `?relay=1` forces relay for testing
+- [x] **Clearer failure message** when the first connection attempt fails; sender stops uploading when the receiver rejects a file
+- [x] **Smoke test** (`npm run smoke -- <url>`) and [docs/DEPLOY.md](DEPLOY.md) with the pre-deploy checklist and the phone -> laptop test
 
 Deploy:
 - [ ] Pick a host that runs a long-lived Node process with WebSockets (Render, Railway, Koyeb, Fly.io). **Not** Vercel / Netlify / GitHub Pages
@@ -252,11 +256,11 @@ npm run dev      # http://localhost:3000
 - [x] M5.1 steps 1–4: lobby, names + system bubbles, leave button, persisted chat
 - [ ] M5.1 step 5: refresh-safe seat reservation (v1.1)
 - [ ] M5.1 steps 6–7: persisted files, clear history (v1.1)
-- [ ] M5.2 Progress bar: implemented in ui.js + peer.js, verify in two real browsers ← NEXT
-- [ ] M7 Ship v1 (fixes, deploy, TURN if needed, README) ← then this
+- [x] M5.2 Progress bar (tested in two real browsers)
+- [ ] M7 Ship v1: code fixes done; deploy + phone test left (see docs/DEPLOY.md) ← NEXT
 - [ ] M5.3 Speed (v1.1)
 - [ ] M6 Stretch
 - [x] Future: connection cleanup + send button state (done as M4.5)
-- [ ] Future: file transfer progress bar (= M5.2)
+- [x] Future: file transfer progress bar (done as M5.2)
 - [ ] Future: leave confirmation dialog
 - [ ] Future: room waiting queue

@@ -9,10 +9,37 @@ const port = process.env.PORT || 3000;
 const server = http.createServer(app)
 const publicPath = path.join(__dirname, "public")
 
+// ICE servers (STUN + optional TURN) come from environment variables, so TURN credentials
+// never live in the repo. The browser fetches the result from /ice-config before joining.
+//   TURN_URLS        comma separated, e.g. "turn:host:3478,turns:host:443?transport=tcp"
+//   TURN_USERNAME / TURN_CREDENTIAL
+// Without all three, only STUN is used.
+function buildIceServers(env = process.env){
+  const iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
+
+  const turnUrls = (env.TURN_URLS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  if(turnUrls.length && env.TURN_USERNAME && env.TURN_CREDENTIAL){
+    iceServers.push({ urls: turnUrls, username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL });
+  }
+  return iceServers;
+}
+
+app.get("/ice-config", (req, res)=>{
+  res.set("Cache-Control", "no-store");
+  res.json({ iceServers: buildIceServers() });
+});
+
+// Simple liveness check (hosts and the smoke test use it)
+app.get("/healthz", (req, res)=>{
+  res.type("text").send("ok");
+});
+
 app.use(express.static(publicPath));
 
 server.listen(port, ()=>{
   console.log(`server listening on port http://localhost:${port}`);
+  const hasTurn = buildIceServers().length > 1;
+  console.log(hasTurn ? "TURN relay: configured" : "TURN relay: not configured (STUN only)");
 })
 
 // const io = new Server(server, { cors: {origin: "*"}})

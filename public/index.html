@@ -33,15 +33,25 @@
 
 						<div class="input-group">
 							<label for="roomId">Room ID</label>
-							<input
-								type="text"
-								id="roomId"
-								placeholder="Enter room ID"
-								required
-							/>
+							<div class="room-row">
+								<input
+									type="text"
+									id="roomId"
+									placeholder="Leave empty to create a new room"
+									autocomplete="off"
+								/>
+								<button
+									type="button"
+									id="generateRoomBtn"
+									class="btn-secondary"
+									title="Generate a random room ID"
+								>
+									🎲 Generate
+								</button>
+							</div>
 						</div>
 
-						<button type="submit" class="btn-create">Create Room</button>
+						<button type="submit" class="btn-create">Create / Join Room</button>
 					</form>
 				</div>
 			</section>

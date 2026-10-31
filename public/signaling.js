@@ -1,5 +1,7 @@
 const socket = io();
+
 const configuration = { iceServers: [{urls: 'stun:stun.l.google.com:19302'}]};
+const forceRelay = new URLSearchParams(location.search).get("relay") === "1";
 
 let peerConnection;
 let dataChannel;
@@ -8,13 +10,40 @@ let currentRoomId = null;
 let currentName = null;
 let peerName = null;
 
+// Candidates that arrive before the offer/answer has been applied (see applyRemoteDescription).
+let pendingCandidates = [];
+
+// Never rejects: on any problem we simply keep the STUN-only defaults.
+async function loadIceConfig(){
+    try{
+        const res = await fetch("/ice-config", {cache: "no-store"});
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if(Array.isArray(data.iceServers) && data.iceServers.length){
+            configuration.iceServers = data.iceServers;
+        }
+    }catch(e){
+        console.log("using default ICE servers:", e);
+    }
+    if(forceRelay) configuration.iceTransportPolicy = "relay";
+}
+const iceConfigReady = loadIceConfig();
+
+// Join only after the ICE settings are known, so the very first RTCPeerConnection already has them.
+function emitJoin(){
+    iceConfigReady.then(()=>{
+        if(!currentRoomId) return;      // left the room while we were waiting
+        socket.emit('join', {
+            roomId: currentRoomId,
+            name: currentName,
+        });
+    });
+}
+
 function joinRoom(roomId, name){
     currentRoomId = roomId;
     currentName = name;
-    if (socket.connected) socket.emit('join', {
-        roomId: currentRoomId,
-        name: currentName,
-    });
+    if (socket.connected) emitJoin();
 }
 
 socket.on("connect", ()=>{
@@ -24,21 +53,41 @@ socket.on("connect", ()=>{
     }
     console.log('Connected to server with ID:', socket.id);
     // 1. Tell the server we want to join a specific room
-    socket.emit('join', {
-        roomId: currentRoomId,
-        name: currentName,
-    });
+    emitJoin();
 });
+
+// The offer/answer and the first ICE candidates travel right behind each other, and the
+// handler for the offer/answer is still awaiting setRemoteDescription when the candidates
+// arrive. Adding a candidate before the remote description exists throws, so those early
+// candidates (often the ones that matter most) used to be lost. Queue them instead.
+async function applyRemoteDescription(pc, sdp){
+    await pc.setRemoteDescription(sdp);
+    if(pc !== peerConnection) return;       // this connection was closed in the meantime
+
+    const queued = pendingCandidates;
+    pendingCandidates = [];
+    for(const candidate of queued){
+        try{
+            await pc.addIceCandidate(candidate);
+        }catch(e){
+            console.log(`error adding queued candidate: ${e}`);
+        }
+    }
+}
 
 socket.on('webrtc-ice', async ({candidate})=>{
     try{
-        if(peerConnection && candidate){
-            await peerConnection.addIceCandidate(candidate);
+        if(!peerConnection || !candidate) return;
+
+        if(!peerConnection.remoteDescription){
+            pendingCandidates.push(candidate);      // too early: keep it for applyRemoteDescription
+            return;
         }
+        await peerConnection.addIceCandidate(candidate);
     } catch (e){
         console.log(`error in peerconnection add ice: ${e}`);
     }
-    
+
 });
 
 socket.on("peer-joined", async (data)=>{
@@ -115,33 +164,38 @@ socket.on("joined", (data)=>{
 });
 
 socket.on('webrtc-offer', async ({senderId, sdp})=>{
+    const pc = peerConnection;  
     try{
-        if(!peerConnection) return;
-        
+        if(!pc) return;
+
         if(senderId!==targetPeerId){
             console.log("wrong person");
             return;
         }
 
-        await peerConnection.setRemoteDescription(sdp);
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        
-        socket.emit('webrtc-answer', {targetPeerId: targetPeerId, sdp: peerConnection.localDescription});
+        await applyRemoteDescription(pc, sdp);
+        if(pc !== peerConnection) return;
+
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        if(pc !== peerConnection) return;
+
+        socket.emit('webrtc-answer', {targetPeerId: targetPeerId, sdp: pc.localDescription});
     } catch (e){
         console.log(`error in webrtc-offer: ${e}`);
     }
-    
+
 });
 
 socket.on('webrtc-answer', async ({ sdp })=>{
+    const pc = peerConnection;
     try{
-        if(!peerConnection) return;
-        await peerConnection.setRemoteDescription(sdp);
+        if(!pc) return;
+        await applyRemoteDescription(pc, sdp);
     }catch (e){
         console.log(`error in webrtc-answer: ${e}`);
     }
-    
+
 });
 
 function leaveRoom(){

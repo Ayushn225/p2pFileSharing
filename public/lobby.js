@@ -1,3 +1,11 @@
+const ROOM_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+
+function generateRoomId(length = 12){
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => ROOM_ALPHABET[b & 31]).join("");
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const nameInputElement = document.getElementById('userName');
     const roomIdInputElement = document.getElementById('roomId');
@@ -7,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const lastRoom = localStorage.getItem('lastJoinedRoom');
 
     if (savedName) nameInputElement.value = savedName;
-    if (lastRoom) roomIdInputElement.placeholder = `Last room: ${lastRoom}`;
+    if (lastRoom) roomIdInputElement.placeholder = `Leave empty to create a new room (last: ${lastRoom})`;
 
     const roomFromUrl = new URLSearchParams(location.search).get("room");
 
@@ -25,6 +33,11 @@ document.addEventListener('DOMContentLoaded', () => {
         showView("lobby");
     }
 
+    document.getElementById('generateRoomBtn').addEventListener('click', () => {
+        roomIdInputElement.value = generateRoomId();
+        roomIdInputElement.focus();
+    });
+
     lobbyForm.addEventListener('submit', (event) => {
         event.preventDefault();
 
@@ -36,8 +49,9 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (roomValue === "") {
-            setLobbyError("Please enter a Room ID");
-            return;
+            // empty = "create a new room": make an unguessable ID for it
+            roomValue = generateRoomId();
+            roomIdInputElement.value = roomValue;
         }
 
         const checkValidRoom = /^[a-zA-Z0-9-]{1,32}$/.test(roomValue);

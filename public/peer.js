@@ -1,8 +1,37 @@
 let reconnectBubble = null;
 
+const MAX_FILE_SIZE = 500 * 1024 * 1024;    // the receiver keeps the whole file in memory
+const MAX_CHAT_LENGTH = 5000;
+
+// Ids of files the receiver rejected: the sender stops uploading them.
+const cancelledTransfers = new Set();
+
+// Everything that arrives over the data channel comes from the other person: never trust it.
+// Returns the reason a file-meta is unacceptable, or null when it is fine.
+function checkFileMeta(meta){
+    if(typeof meta.id !== "string" || meta.id.length === 0 || meta.id.length > 100) return "Invalid file";
+    if(typeof meta.name !== "string" || meta.name.length === 0 || meta.name.length > 255) return "Invalid file name";
+    if(!Number.isSafeInteger(meta.size) || meta.size < 0) return "Invalid file size";
+    if(meta.size > MAX_FILE_SIZE) return `File is larger than ${getFormattedSize(MAX_FILE_SIZE)}`;
+    if(meta.mimeType !== undefined && (typeof meta.mimeType !== "string" || meta.mimeType.length > 100)) return "Invalid file type";
+    if(typeof meta.timestamp !== "string" || meta.timestamp.length > 40) return "Invalid file";
+    return null;
+}
+
+// Control and bidi-override characters can make "evil‮gnp.exe" look like something else.
+function cleanFileName(name){
+    const cleaned = name
+        .replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, "")
+        .replace(/[\/\\]/g, "_")
+        .trim();
+    return cleaned || "file";
+}
+
 function initPeerConnection(){
     const pc = new RTCPeerConnection(configuration);
     peerConnection = pc;
+    pendingCandidates = [];             // a new connection starts without leftovers
+    let connectedOnce = false;
 
     pc.onicecandidate = async (event)=>{
         if(event.candidate && targetPeerId){
@@ -25,25 +54,32 @@ function initPeerConnection(){
         const state = pc.connectionState;
 
         switch(state){
-            case 'failed':
+            case 'failed': {
+                const who = peerName ?? "Peer";
+                const text = connectedOnce
+                    ? `Connection to ${who} is lost`
+                    : `Couldn't connect to ${who}. Your network may be blocking direct connections: try another network, or another browser.`;
+
                 if(reconnectBubble){
-                    updateSystemMessage(reconnectBubble, `Connection Lost`, false);
+                    updateSystemMessage(reconnectBubble, text, false);
                     reconnectBubble = null;
                 }else{
-                    updateSystemMessage(null, `Connection to ${peerName?? "Peer"} is lost`, false);
+                    updateSystemMessage(null, text, false);
                     saveRecord({
                         kind: "system",
-                        text: `Connection to ${peerName?? "Peer"} is lost`,
+                        text: text,
                         setActive: false,
                     }, currentRoomId, currentName);
                 }
                 closeConnection('failed');
                 break;
+            }
             case 'disconnected':
                 setStatus("reconnecting....")
                 if(!reconnectBubble) reconnectBubble = updateSystemMessage(null, `${peerName?? "Peer"} is reconnecting...`, false);
                 break;
             case 'connected':
+                connectedOnce = true;
                 setStatus("connected")
                 if(reconnectBubble) updateSystemMessage(reconnectBubble, `${peerName?? "Peer"} reconnected`, true);
                 reconnectBubble = null;
@@ -58,6 +94,7 @@ function setupChannel(channel){
     let fileMetaData = null;
     let chunks = [];
     let recievedBytes = 0;
+    let discarding = false;     // true after we rejected a file: its remaining chunks are dropped silently
 
     function resetReceive(){
         chunks = [];
@@ -80,6 +117,16 @@ function setupChannel(channel){
         failTransfer(id, reason);
         reply({type: "file-error", id, reason});
         resetReceive();
+        discarding = true;
+    }
+
+    // The announcement itself is unacceptable (too big, malformed, ...): no bubble, just a notice.
+    function rejectFileMeta(meta, reason){
+        discarding = true;
+        updateSystemMessage(null, `Rejected a file from ${peerName ?? "your peer"}: ${reason}`, false);
+        if(typeof meta.id === "string"){
+            reply({type: "file-error", id: meta.id.slice(0, 100), reason});
+        }
     }
 
     channel.binaryType = "arraybuffer"
@@ -87,13 +134,30 @@ function setupChannel(channel){
     channel.onmessage = (event) =>{
         if(typeof event.data === 'string'){
             // console.log(`recieved ${event.data}`);
-            const recieved = JSON.parse(event.data);
+            let recieved;
+            try{
+                recieved = JSON.parse(event.data);
+            }catch(e){
+                return;                         // not JSON: ignore it
+            }
+            if(!recieved || typeof recieved !== "object") return;
             
-            if(recieved.type === "chat") handleTheirMessage(recieved);
-            else if(recieved.type==="file-meta"){
+            if(recieved.type === "chat"){
+                if(typeof recieved.message !== "string" || recieved.message.length > MAX_CHAT_LENGTH) return;
+                handleTheirMessage(recieved);
+            }else if(recieved.type==="file-meta"){
                 // a new file while another is unfinished: the old one is abandoned
                 if(fileMetaData) failTransfer(fileMetaData.id, "Interrupted");
                 resetReceive();
+
+                const problem = checkFileMeta(recieved);
+                if(problem){
+                    rejectFileMeta(recieved, problem);
+                    return;
+                }
+
+                discarding = false;
+                recieved.name = cleanFileName(recieved.name);
                 fileMetaData = recieved;
                 handleTheirFile(recieved);      // bubble appears, receiving 0%
             }else if(recieved.type === "file-end"){
@@ -114,11 +178,13 @@ function setupChannel(channel){
                 // sender side: the receiver has the whole file
                 finishTransfer(recieved.id);
             }else if(recieved.type === "file-error"){
-                // sender side: the receiver could not complete this file
-                failTransfer(recieved.id, recieved.reason || "Receiver could not complete the transfer");
+                // sender side: the receiver could not complete this file, so stop uploading it
+                if(typeof recieved.id !== "string") return;
+                cancelledTransfers.add(recieved.id);
+                failTransfer(recieved.id, String(recieved.reason || "Receiver could not complete the transfer").slice(0, 200));
             }
         }else if(event.data instanceof ArrayBuffer || event.data instanceof Blob){
-            // console.log("in the file buffer recieving");
+            if(discarding) return;      // the rest of a file we already rejected
             if(!fileMetaData){
                 console.error("Received a file buffer, but missing the metadata!");
                 resetReceive();
@@ -227,6 +293,9 @@ async function sendFile(file, meta){
 
     try{
         for(let offset = 0; offset<file.size; offset+= CHUNK_SIZE){
+            // the receiver said no (too big, invalid, ...): don't keep uploading
+            if(cancelledTransfers.has(meta.id)) throw new Error("rejected by the receiver");
+
             if(channel.bufferedAmount > MAX_BUFFER){
                 await waitForDrain(channel);
             }
@@ -242,6 +311,7 @@ async function sendFile(file, meta){
         if(channel.readyState !== 'open'){
             throw new Error("channel closed while sending");
         }
+        if(cancelledTransfers.has(meta.id)) throw new Error("rejected by the receiver");
     }finally{
         clearInterval(tick);
     }
@@ -263,8 +333,16 @@ function queueFile(file){
         timestamp: getFormattedTime(),
     };
 
+    // too big: show the bubble as failed straight away and never start sending
+    const tooBig = file.size > MAX_FILE_SIZE;
+
     // the bubble shows up immediately ("waiting") while earlier files are still sending
-    handleMyFile(meta, URL.createObjectURL(file));
+    handleMyFile(meta, tooBig ? null : URL.createObjectURL(file));
+
+    if(tooBig){
+        failTransfer(meta.id, `File is larger than ${getFormattedSize(MAX_FILE_SIZE)}`);
+        return;
+    }
 
     sendQueue = sendQueue
         .then(() => sendFile(file, meta))
@@ -283,6 +361,8 @@ function closeConnection(reason = "disconnected"){
     targetPeerId = null;
     peerName = null;
     reconnectBubble = null;
+    pendingCandidates = [];
+    cancelledTransfers.clear();
 
     failAllTransfers("Connection lost");
 
