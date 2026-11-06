@@ -3,6 +3,13 @@ let reconnectBubble = null;
 const MAX_FILE_SIZE = 500 * 1024 * 1024;    // the receiver keeps the whole file in memory
 const MAX_CHAT_LENGTH = 5000;
 
+// The file is cut into CHUNK_SIZE pieces. 16 KB is the message size every browser is guaranteed to
+// accept on a data channel, so it is the interoperable choice (Chrome allows up to 256 KB).
+// The sender announces chunkSize and chunkCount in file-meta so the receiver can check what it gets.
+const CHUNK_SIZE = 16 * 1024;
+const MIN_CHUNK_SIZE = 1024;
+const MAX_CHUNK_SIZE = 256 * 1024;
+
 // Ids of files the receiver rejected: the sender stops uploading them.
 const cancelledTransfers = new Set();
 
@@ -13,6 +20,8 @@ function checkFileMeta(meta){
     if(typeof meta.name !== "string" || meta.name.length === 0 || meta.name.length > 255) return "Invalid file name";
     if(!Number.isSafeInteger(meta.size) || meta.size < 0) return "Invalid file size";
     if(meta.size > MAX_FILE_SIZE) return `File is larger than ${getFormattedSize(MAX_FILE_SIZE)}`;
+    if(!Number.isSafeInteger(meta.chunkSize) || meta.chunkSize < MIN_CHUNK_SIZE || meta.chunkSize > MAX_CHUNK_SIZE) return "Invalid chunk size";
+    if(meta.chunkCount !== Math.ceil(meta.size / meta.chunkSize)) return "Invalid chunk count";
     if(meta.mimeType !== undefined && (typeof meta.mimeType !== "string" || meta.mimeType.length > 100)) return "Invalid file type";
     if(typeof meta.timestamp !== "string" || meta.timestamp.length > 40) return "Invalid file";
     return null;
@@ -163,7 +172,7 @@ function setupChannel(channel){
             }else if(recieved.type === "file-end"){
                 if(!fileMetaData || recieved.id !== fileMetaData.id) return;
 
-                if(recievedBytes !== fileMetaData.size){
+                if(recievedBytes !== fileMetaData.size || chunks.length !== fileMetaData.chunkCount){
                     rejectIncomingFile("File was incomplete");
                     return;
                 }
@@ -193,6 +202,13 @@ function setupChannel(channel){
             // const buffer = event.data;
             // console.log(recievedBytes);
 
+            // Never hold more than the announcement allows: a peer sending millions of tiny chunks
+            // would otherwise cost far more memory than the file size suggests.
+            if(chunks.length >= fileMetaData.chunkCount || event.data.byteLength > fileMetaData.chunkSize){
+                rejectIncomingFile("Chunks don't match the announcement");
+                return;
+            }
+
             chunks.push(event.data);
             recievedBytes += event.data.byteLength;
             if(recievedBytes > fileMetaData.size){
@@ -201,7 +217,7 @@ function setupChannel(channel){
                 return;
             }
 
-            updateProgress(fileMetaData.id, percentOf(recievedBytes, fileMetaData.size));
+            updateProgress(fileMetaData.id, percentOf(recievedBytes, fileMetaData.size), recievedBytes);
         }
     }
 
@@ -276,19 +292,19 @@ async function sendFile(file, meta){
     if(!channel || channel.readyState !== 'open'){
         throw new Error("cannot send file channel is not open");
     }
-    const CHUNK_SIZE = 16*1024;
     const MAX_BUFFER = 8*1024*1024;
     channel.bufferedAmountLowThreshold = 1024*1024;
 
     channel.send(JSON.stringify(meta));
-    updateProgress(meta.id, 0);                         // waiting -> sending
+    updateProgress(meta.id, 0, 0);                      // waiting -> sending (starts the stopwatch)
 
     // The loop below sleeps while the buffer drains, so it can't drive the bar by itself
     // (it would freeze, then jump ~7 MB at a time). A timer reads bufferedAmount instead:
     //   handed to the channel - still queued = actually on the wire.
     let handed = 0;
     const tick = setInterval(() => {
-        updateProgress(meta.id, percentOf(handed - channel.bufferedAmount, file.size));
+        const onTheWire = Math.max(0, handed - channel.bufferedAmount);
+        updateProgress(meta.id, percentOf(onTheWire, file.size), onTheWire);
     }, 150);
 
     try{
@@ -316,7 +332,7 @@ async function sendFile(file, meta){
         clearInterval(tick);
     }
 
-    updateProgress(meta.id, 100);
+    updateProgress(meta.id, 100, file.size);
     channel.send(JSON.stringify({type: "file-end", id: meta.id}));
     // no "done" here: the bubble turns "Delivered" when the receiver's file-ack arrives
 }
@@ -330,6 +346,8 @@ function queueFile(file){
         name: file.name,
         size: file.size,
         mimeType: file.type,
+        chunkSize: CHUNK_SIZE,
+        chunkCount: Math.ceil(file.size / CHUNK_SIZE),
         timestamp: getFormattedTime(),
     };
 
