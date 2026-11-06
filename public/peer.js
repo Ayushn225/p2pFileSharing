@@ -1,39 +1,85 @@
 let reconnectBubble = null;
 
-const MAX_FILE_SIZE = 500 * 1024 * 1024;    // the receiver keeps the whole file in memory
 const MAX_CHAT_LENGTH = 5000;
+
+// File transfer protocol (JSON messages on the data channel, chunks are binary):
+//
+//   sender                                              receiver
+//   file-offer {id, name, size, chunkSize, chunkCount}  ->   shows Accept / Decline
+//                                                       <-   file-accept {id}  | file-decline {id, reason}
+//   chunk, chunk, chunk ...                             ->   hashed + written to disk as they arrive
+//   file-end {id, sha256}                               ->   compares the checksum, THEN closes the file
+//                                                       <-   file-ack {id}     | file-error {id, reason}
+//   file-cancel {id}  (sender gave up waiting)          ->
+//
+// The sender waits for the ack before the next file, so there is only ever one transfer at a time.
+// Size limits (MAX_MEMORY_FILE_SIZE, MAX_DISK_FILE_SIZE) and the sinks live in sinks.js, SHA-256 in sha256.js.
 
 // The file is cut into CHUNK_SIZE pieces. 16 KB is the message size every browser is guaranteed to
 // accept on a data channel, so it is the interoperable choice (Chrome allows up to 256 KB).
-// The sender announces chunkSize and chunkCount in file-meta so the receiver can check what it gets.
+// The sender announces chunkSize and chunkCount in the offer so the receiver can check what it gets.
 const CHUNK_SIZE = 16 * 1024;
 const MIN_CHUNK_SIZE = 1024;
 const MAX_CHUNK_SIZE = 256 * 1024;
 
+// If the disk falls this far behind the network, the receiver gives up instead of filling its memory.
+const MAX_WRITE_BACKLOG = 64 * 1024 * 1024;
+
+const OFFER_TIMEOUT_MS = 5 * 60 * 1000;     // how long the sender waits for Accept
+const ACK_TIMEOUT_MS = 5 * 60 * 1000;       // ... and for the receiver to confirm the finished file
+
 // Ids of files the receiver rejected: the sender stops uploading them.
 const cancelledTransfers = new Set();
 
+// The file being received right now: { meta, mode, state, sink, hash, received, count }
+// state: "checking" -> "offered" -> "preparing" -> "receiving" -> "finishing"
+let currentIncoming = null;
+
+// The sender waits for the receiver's answers ("accept:<id>", "ack:<id>").
+const replyWaiters = new Map();
+
+// An error whose message is meant for the user (shown in the file bubble).
+class SendFailure extends Error {}
+
+function waitForReply(kind, id, timeoutMs){
+    return new Promise((resolve, reject) => {
+        const key = `${kind}:${id}`;
+        const timer = setTimeout(() => {
+            replyWaiters.delete(key);
+            reject(new SendFailure(kind === "accept" ? "No answer from the receiver" : "The receiver did not confirm the file"));
+        }, timeoutMs);
+        replyWaiters.set(key, {
+            resolve: () => { clearTimeout(timer); resolve(); },
+            reject: (err) => { clearTimeout(timer); reject(err); },
+        });
+    });
+}
+
+function settleReply(kind, id, error){
+    const key = `${kind}:${id}`;
+    const waiter = replyWaiters.get(key);
+    if(!waiter) return;
+    replyWaiters.delete(key);
+    if(error) waiter.reject(error); else waiter.resolve();
+}
+
+function failAllReplyWaiters(error){
+    replyWaiters.forEach((waiter) => waiter.reject(error));
+    replyWaiters.clear();
+}
+
 // Everything that arrives over the data channel comes from the other person: never trust it.
-// Returns the reason a file-meta is unacceptable, or null when it is fine.
+// Returns the reason an offer is unacceptable, or null when it is fine.
 function checkFileMeta(meta){
     if(typeof meta.id !== "string" || meta.id.length === 0 || meta.id.length > 100) return "Invalid file";
     if(typeof meta.name !== "string" || meta.name.length === 0 || meta.name.length > 255) return "Invalid file name";
     if(!Number.isSafeInteger(meta.size) || meta.size < 0) return "Invalid file size";
-    if(meta.size > MAX_FILE_SIZE) return `File is larger than ${getFormattedSize(MAX_FILE_SIZE)}`;
+    if(meta.size > MAX_DISK_FILE_SIZE) return `File is larger than ${getFormattedSize(MAX_DISK_FILE_SIZE)}`;
     if(!Number.isSafeInteger(meta.chunkSize) || meta.chunkSize < MIN_CHUNK_SIZE || meta.chunkSize > MAX_CHUNK_SIZE) return "Invalid chunk size";
     if(meta.chunkCount !== Math.ceil(meta.size / meta.chunkSize)) return "Invalid chunk count";
     if(meta.mimeType !== undefined && (typeof meta.mimeType !== "string" || meta.mimeType.length > 100)) return "Invalid file type";
     if(typeof meta.timestamp !== "string" || meta.timestamp.length > 40) return "Invalid file";
     return null;
-}
-
-// Control and bidi-override characters can make "evil‮gnp.exe" look like something else.
-function cleanFileName(name){
-    const cleaned = name
-        .replace(/[\u0000-\u001f\u007f‪-‮⁦-⁩]/g, "")
-        .replace(/[\/\\]/g, "_")
-        .trim();
-    return cleaned || "file";
 }
 
 function initPeerConnection(){
@@ -100,18 +146,9 @@ function initPeerConnection(){
 }
 
 function setupChannel(channel){
-    let fileMetaData = null;
-    let chunks = [];
-    let recievedBytes = 0;
-    let discarding = false;     // true after we rejected a file: its remaining chunks are dropped silently
+    let discarding = false;     // true after we refused a file: its remaining chunks (if any) are dropped silently
 
-    function resetReceive(){
-        chunks = [];
-        fileMetaData = null;
-        recievedBytes = 0;
-    }
-
-    // Small replies (ack / error) must never throw inside onmessage.
+    // Small replies must never throw inside onmessage.
     function reply(obj){
         try{
             channel.send(JSON.stringify(obj));
@@ -120,29 +157,144 @@ function setupChannel(channel){
         }
     }
 
-    // The incoming file can't be completed: fail our bubble, tell the sender which file, start clean.
-    function rejectIncomingFile(reason){
-        const id = fileMetaData.id;
-        failTransfer(id, reason);
-        reply({type: "file-error", id, reason});
-        resetReceive();
-        discarding = true;
+    function dropSink(inc){
+        return inc.sink ? inc.sink.abort().catch(() => {}) : Promise.resolve();
     }
 
-    // The announcement itself is unacceptable (too big, malformed, ...): no bubble, just a notice.
-    function rejectFileMeta(meta, reason){
+    // The file being received can't be completed: fail the bubble, tell the sender, throw the partial file away.
+    function rejectIncoming(reason){
+        const inc = currentIncoming;
+        if(!inc) return Promise.resolve();
+        currentIncoming = null;
+        discarding = true;
+        failTransfer(inc.meta.id, reason);
+        reply({type: "file-error", id: inc.meta.id, reason});
+        return dropSink(inc);
+    }
+
+    // The offer itself is unacceptable (too big, malformed, no space, ...): a notice instead of a file bubble.
+    function refuseOffer(meta, reason){
         discarding = true;
         updateSystemMessage(null, `Rejected a file from ${peerName ?? "your peer"}: ${reason}`, false);
         if(typeof meta.id === "string"){
-            reply({type: "file-error", id: meta.id.slice(0, 100), reason});
+            reply({type: "file-decline", id: meta.id.slice(0, 100), reason});
         }
+    }
+
+    function declineIncoming(inc, reason){
+        if(currentIncoming !== inc || inc.state !== "offered") return;
+        currentIncoming = null;
+        failTransfer(inc.meta.id, reason);
+        reply({type: "file-decline", id: inc.meta.id, reason});
+    }
+
+    // Called straight from the click on "Accept": the save dialog may only open from a user gesture,
+    // so nothing is awaited before createReceiveSink() starts.
+    async function acceptIncoming(inc){
+        if(currentIncoming !== inc || inc.state !== "offered") return;
+        inc.state = "preparing";
+        markPreparing(inc.meta.id);
+
+        let sink;
+        try{
+            sink = await createReceiveSink(inc.mode, inc.meta);
+        }catch(e){
+            if(currentIncoming !== inc) return;
+            currentIncoming = null;
+            const expected = (e instanceof ReceiveCancelled) || (e instanceof ReceiveRefused);
+            if(!expected) console.log(e);
+            const reason = expected ? e.message : "Could not open a file to write to";
+            failTransfer(inc.meta.id, reason);
+            reply({type: "file-decline", id: inc.meta.id, reason});
+            return;
+        }
+
+        if(currentIncoming !== inc){            // the connection closed or the sender withdrew while we prepared
+            sink.abort().catch(() => {});
+            return;
+        }
+
+        inc.sink = sink;
+        inc.hash = new Sha256();
+        inc.state = "receiving";
+        updateProgress(inc.meta.id, 0, 0);      // offered -> receiving: the stopwatch starts here
+        reply({type: "file-accept", id: inc.meta.id});
+    }
+
+    async function onOffer(offer){
+        if(currentIncoming){                    // one file at a time
+            if(typeof offer.id === "string") reply({type: "file-decline", id: offer.id.slice(0, 100), reason: "Busy with another file"});
+            return;
+        }
+
+        const problem = checkFileMeta(offer);
+        if(problem){
+            refuseOffer(offer, problem);
+            return;
+        }
+
+        offer.name = sanitizeFileName(offer.name);
+        const inc = { meta: offer, mode: detectReceiveMode(), state: "checking", sink: null, hash: null, received: 0, count: 0 };
+        currentIncoming = inc;
+        discarding = false;
+
+        // say no early to what this browser can't take (too big for memory, no storage space)
+        const refusal = await refusalReason(inc.mode, offer.size);
+        if(currentIncoming !== inc) return;     // the connection closed meanwhile
+        if(refusal){
+            currentIncoming = null;
+            refuseOffer(offer, refusal);
+            return;
+        }
+
+        inc.state = "offered";
+        handleTheirOffer(offer, {
+            note: describeReceiveMode(inc.mode),
+            onAccept: () => acceptIncoming(inc),
+            onDecline: () => declineIncoming(inc, "Declined"),
+        });
+    }
+
+    async function onFileEnd(end){
+        const inc = currentIncoming;
+        if(!inc || inc.state !== "receiving" || end.id !== inc.meta.id) return;
+
+        if(inc.received !== inc.meta.size || inc.count !== inc.meta.chunkCount){
+            await rejectIncoming("File was incomplete");
+            return;
+        }
+        if(typeof end.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(end.sha256)){
+            await rejectIncoming("Missing checksum");
+            return;
+        }
+
+        // Compare the checksum BEFORE the file is closed: the file only appears on disk at commit().
+        inc.state = "finishing";
+        if(inc.hash.digestHex() !== end.sha256){
+            await rejectIncoming("Checksum mismatch: the file arrived damaged");
+            return;
+        }
+
+        let result;
+        try{
+            result = await inc.sink.commit();
+        }catch(e){
+            console.log(e);
+            if(currentIncoming === inc) await rejectIncoming("Could not save the file");
+            return;
+        }
+        if(currentIncoming !== inc) return;     // the connection closed while we were saving
+        currentIncoming = null;
+
+        const source = result.file || result.blob;
+        finishTransfer(inc.meta.id, source ? URL.createObjectURL(source) : null, result.savedAs);
+        reply({type: "file-ack", id: inc.meta.id});
     }
 
     channel.binaryType = "arraybuffer"
 
-    channel.onmessage = (event) =>{
+    channel.onmessage = async (event) =>{
         if(typeof event.data === 'string'){
-            // console.log(`recieved ${event.data}`);
             let recieved;
             try{
                 recieved = JSON.parse(event.data);
@@ -150,74 +302,77 @@ function setupChannel(channel){
                 return;                         // not JSON: ignore it
             }
             if(!recieved || typeof recieved !== "object") return;
-            
-            if(recieved.type === "chat"){
-                if(typeof recieved.message !== "string" || recieved.message.length > MAX_CHAT_LENGTH) return;
-                handleTheirMessage(recieved);
-            }else if(recieved.type==="file-meta"){
-                // a new file while another is unfinished: the old one is abandoned
-                if(fileMetaData) failTransfer(fileMetaData.id, "Interrupted");
-                resetReceive();
 
-                const problem = checkFileMeta(recieved);
-                if(problem){
-                    rejectFileMeta(recieved, problem);
-                    return;
+            switch(recieved.type){
+                case "chat":
+                    if(typeof recieved.message !== "string" || recieved.message.length > MAX_CHAT_LENGTH) return;
+                    handleTheirMessage(recieved);
+                    break;
+
+                // ---- we are the receiver ----
+                case "file-offer":
+                    await onOffer(recieved);
+                    break;
+                case "file-end":
+                    await onFileEnd(recieved);
+                    break;
+                case "file-cancel": {           // the sender gave up waiting
+                    const inc = currentIncoming;
+                    if(!inc || recieved.id !== inc.meta.id) break;
+                    currentIncoming = null;
+                    discarding = true;
+                    failTransfer(inc.meta.id, "Cancelled by the sender");
+                    await dropSink(inc);
+                    break;
                 }
 
-                discarding = false;
-                recieved.name = cleanFileName(recieved.name);
-                fileMetaData = recieved;
-                handleTheirFile(recieved);      // bubble appears, receiving 0%
-            }else if(recieved.type === "file-end"){
-                if(!fileMetaData || recieved.id !== fileMetaData.id) return;
-
-                if(recievedBytes !== fileMetaData.size || chunks.length !== fileMetaData.chunkCount){
-                    rejectIncomingFile("File was incomplete");
-                    return;
+                // ---- we are the sender ----
+                case "file-accept":
+                    if(typeof recieved.id === "string") settleReply("accept", recieved.id);
+                    break;
+                case "file-ack":                // the receiver checked the checksum and saved the whole file
+                    finishTransfer(recieved.id);
+                    if(typeof recieved.id === "string") settleReply("ack", recieved.id);
+                    break;
+                case "file-decline":
+                case "file-error": {            // the receiver said no, or could not complete the file: stop uploading it
+                    if(typeof recieved.id !== "string") return;
+                    const reason = String(recieved.reason || (recieved.type === "file-decline" ? "Declined by the receiver" : "Receiver could not complete the transfer")).slice(0, 200);
+                    cancelledTransfers.add(recieved.id);
+                    failTransfer(recieved.id, reason);
+                    const failure = new SendFailure(reason);
+                    settleReply("accept", recieved.id, failure);
+                    settleReply("ack", recieved.id, failure);
+                    break;
                 }
-
-                const blob = new Blob(chunks, {type: fileMetaData.mimeType});
-                const url = URL.createObjectURL(blob);
-                finishTransfer(fileMetaData.id, url);
-                reply({type: "file-ack", id: fileMetaData.id});
-                resetReceive();
-
-            }else if(recieved.type === "file-ack"){
-                // sender side: the receiver has the whole file
-                finishTransfer(recieved.id);
-            }else if(recieved.type === "file-error"){
-                // sender side: the receiver could not complete this file, so stop uploading it
-                if(typeof recieved.id !== "string") return;
-                cancelledTransfers.add(recieved.id);
-                failTransfer(recieved.id, String(recieved.reason || "Receiver could not complete the transfer").slice(0, 200));
             }
-        }else if(event.data instanceof ArrayBuffer || event.data instanceof Blob){
-            if(discarding) return;      // the rest of a file we already rejected
-            if(!fileMetaData){
-                console.error("Received a file buffer, but missing the metadata!");
-                resetReceive();
+        }else if(event.data instanceof ArrayBuffer){
+            if(discarding) return;              // the rest of a file we already refused
+            const inc = currentIncoming;
+            if(!inc || inc.state !== "receiving") return;      // data nobody asked for
+
+            // Never take more than the offer allowed: a peer sending millions of tiny chunks would
+            // otherwise cost far more memory than the file size suggests.
+            const size = event.data.byteLength;
+            if(inc.count >= inc.meta.chunkCount || size > inc.meta.chunkSize){
+                rejectIncoming("Chunks don't match the announcement");
                 return;
             }
-            // const buffer = event.data;
-            // console.log(recievedBytes);
-
-            // Never hold more than the announcement allows: a peer sending millions of tiny chunks
-            // would otherwise cost far more memory than the file size suggests.
-            if(chunks.length >= fileMetaData.chunkCount || event.data.byteLength > fileMetaData.chunkSize){
-                rejectIncomingFile("Chunks don't match the announcement");
+            if(inc.received + size > inc.meta.size){
+                rejectIncoming("File was larger than announced");
                 return;
             }
 
-            chunks.push(event.data);
-            recievedBytes += event.data.byteLength;
-            if(recievedBytes > fileMetaData.size){
-                console.error("recievedBye is greater than expected");
-                rejectIncomingFile("File was larger than announced");
+            inc.hash.update(event.data);
+            inc.sink.write(event.data);
+            inc.count++;
+            inc.received += size;
+
+            if(inc.sink.backlog > MAX_WRITE_BACKLOG){
+                rejectIncoming("Your disk can't keep up with the transfer");
                 return;
             }
-
-            updateProgress(fileMetaData.id, percentOf(recievedBytes, fileMetaData.size), recievedBytes);
+            updateProgress(inc.meta.id, percentOf(inc.received, inc.meta.size), inc.received);
         }
     }
 
@@ -256,7 +411,7 @@ function send(msg){
             type: 'chat'
         }, true);
     }
-    
+
 }
 
 function waitForDrain(channel){
@@ -290,13 +445,25 @@ function percentOf(done, total){
 async function sendFile(file, meta){
     const channel = dataChannel;
     if(!channel || channel.readyState !== 'open'){
-        throw new Error("cannot send file channel is not open");
+        throw new SendFailure("Not connected");
     }
     const MAX_BUFFER = 8*1024*1024;
     channel.bufferedAmountLowThreshold = 1024*1024;
 
+    // 1. Offer the file and wait: nothing is sent before the receiver accepts.
     channel.send(JSON.stringify(meta));
-    updateProgress(meta.id, 0, 0);                      // waiting -> sending (starts the stopwatch)
+    markOffered(meta.id);
+    try{
+        await waitForReply("accept", meta.id, OFFER_TIMEOUT_MS);
+    }catch(err){
+        try{ channel.send(JSON.stringify({type: "file-cancel", id: meta.id})); }catch(e){ /* channel is gone */ }
+        throw err;
+    }
+
+    updateProgress(meta.id, 0, 0);                      // offered -> sending (starts the stopwatch)
+
+    // 2. The chunks. The checksum is computed while sending, so the file is read only once.
+    const hash = new Sha256();
 
     // The loop below sleeps while the buffer drains, so it can't drive the bar by itself
     // (it would freeze, then jump ~7 MB at a time). A timer reads bufferedAmount instead:
@@ -309,13 +476,14 @@ async function sendFile(file, meta){
 
     try{
         for(let offset = 0; offset<file.size; offset+= CHUNK_SIZE){
-            // the receiver said no (too big, invalid, ...): don't keep uploading
-            if(cancelledTransfers.has(meta.id)) throw new Error("rejected by the receiver");
+            // the receiver said no (invalid, disk full, ...): don't keep uploading
+            if(cancelledTransfers.has(meta.id)) throw new SendFailure("Rejected by the receiver");
 
             if(channel.bufferedAmount > MAX_BUFFER){
                 await waitForDrain(channel);
             }
             const chunk = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
+            hash.update(chunk);
             channel.send(chunk);
             handed = offset + chunk.byteLength;
         }
@@ -327,21 +495,23 @@ async function sendFile(file, meta){
         if(channel.readyState !== 'open'){
             throw new Error("channel closed while sending");
         }
-        if(cancelledTransfers.has(meta.id)) throw new Error("rejected by the receiver");
+        if(cancelledTransfers.has(meta.id)) throw new SendFailure("Rejected by the receiver");
     }finally{
         clearInterval(tick);
     }
 
     updateProgress(meta.id, 100, file.size);
-    channel.send(JSON.stringify({type: "file-end", id: meta.id}));
-    // no "done" here: the bubble turns "Delivered" when the receiver's file-ack arrives
+
+    // 3. The checksum travels with file-end. The receiver compares it before closing the file, then confirms.
+    channel.send(JSON.stringify({type: "file-end", id: meta.id, sha256: hash.digestHex()}));
+    await waitForReply("ack", meta.id, ACK_TIMEOUT_MS);   // the bubble turns "Delivered" in the file-ack handler
 }
 
 let sendQueue = Promise.resolve();
 
 function queueFile(file){
     const meta = {
-        type: "file-meta",
+        type: "file-offer",
         id: newTransferId(),
         name: file.name,
         size: file.size,
@@ -352,13 +522,13 @@ function queueFile(file){
     };
 
     // too big: show the bubble as failed straight away and never start sending
-    const tooBig = file.size > MAX_FILE_SIZE;
+    const tooBig = file.size > MAX_DISK_FILE_SIZE;
 
     // the bubble shows up immediately ("waiting") while earlier files are still sending
     handleMyFile(meta, tooBig ? null : URL.createObjectURL(file));
 
     if(tooBig){
-        failTransfer(meta.id, `File is larger than ${getFormattedSize(MAX_FILE_SIZE)}`);
+        failTransfer(meta.id, `File is larger than ${getFormattedSize(MAX_DISK_FILE_SIZE)}`);
         return;
     }
 
@@ -366,7 +536,7 @@ function queueFile(file){
         .then(() => sendFile(file, meta))
         .catch((err)=>{
             console.log(err);
-            failTransfer(meta.id, "Failed to send");
+            failTransfer(meta.id, err instanceof SendFailure ? err.message : "Failed to send");
         })
 }
 
@@ -383,6 +553,12 @@ function closeConnection(reason = "disconnected"){
     cancelledTransfers.clear();
 
     failAllTransfers("Connection lost");
+    failAllReplyWaiters(new SendFailure("Connection lost"));
+
+    // a half-received file must not stay behind on disk
+    const incoming = currentIncoming;
+    currentIncoming = null;
+    if(incoming && incoming.sink) incoming.sink.abort().catch(() => {});
 
     // 1. Close the Data Channel first
     if (channel) {
@@ -391,7 +567,7 @@ function closeConnection(reason = "disconnected"){
         channel.onopen = null;
         channel.onclose = null;
         channel.onerror = null;
-        
+
         if (channel.readyState !== 'closed') {
             channel.close();
             console.log("Data channel closed.");
@@ -413,7 +589,7 @@ function closeConnection(reason = "disconnected"){
             pc.close();
             console.log("Peer connection closed.");
         }
-    
+
     }
 
     setChatEnabled(false);

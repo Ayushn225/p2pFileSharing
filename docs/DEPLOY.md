@@ -11,7 +11,7 @@ Already done in the code (as of this commit):
 
 - [x] Server reads its port from `PORT`, serves files with `path.join(__dirname, "public")`
 - [x] Signals (offer / answer / ICE) are only relayed to the other person in the same room, and malformed input can't crash the server
-- [x] File announcements are validated, files over 500 MB are refused, file names are cleaned
+- [x] File offers are validated, the receiver must accept each file, large files stream to disk, file names are cleaned, a SHA-256 checksum is verified before saving
 - [x] Random, unguessable room IDs ("Create / Join Room" with an empty room ID, or the Generate button)
 - [x] ICE candidate queue (early candidates are no longer dropped), clearer "couldn't connect" message
 - [x] TURN is configurable with environment variables, `/ice-config` and `/healthz` endpoints
@@ -120,8 +120,10 @@ Goal: prove that a file really travels from your phone to your laptop (and back)
 4. **Chat both ways:** send "hi" from each device and see it arrive.
 5. **Phone -> laptop (the main test):** on the phone tap the paperclip, choose a photo (a few MB), press send.
    Expect:
-   - phone: the bubble goes *Waiting to send...* -> *Sending... 42%* -> **✓ Delivered**
-   - laptop: *Receiving... 42%* -> **✓ Received**, a thumbnail, and a **Download** link
+   - phone: *Waiting to send...*, then *Waiting for <name> to accept...*
+   - laptop: *<name> wants to send you this file* with **Accept** / **Decline**. Click **Accept** (in Chrome or Edge a save dialog opens: pick a place; in other browsers the file is kept in browser storage)
+   - phone: *Sending... 42% · 7.9 MB/s*, then **✓ Delivered**
+   - laptop: *Receiving... 42%*, then **✓ Received** with a **Download** link (or **✓ Saved as ...** if you chose a place), plus a summary like `5.0 MB in 1.2 s · 4.1 MB/s · 320 chunks of 16 KB`
    - download it on the laptop, open it and check that it is the same photo and the same size
 6. **Laptop -> phone:** send a PDF or image from the laptop. On an iPhone the Download link may open a viewer instead of
    saving; use the share button there to save it.

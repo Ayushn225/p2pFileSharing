@@ -5,8 +5,8 @@ Node.js server introduces the two peers. After that, data flows peer to peer
 and never touches the server.
 
 > **Status:** working prototype, deployed and tested: a phone and a laptop can join a room and
-> send files to each other over a direct, encrypted WebRTC data channel (files up to 500 MB, with
-> live progress bars). See [Known limitations](#known-limitations).
+> send files to each other over a direct, encrypted WebRTC data channel (the receiver accepts each file,
+> large files stream to disk, and a SHA-256 checksum is verified before the file is saved). See [Known limitations](#known-limitations).
 >
 > **Live demo:** https://p2pfilesharing.onrender.com
 > (free hosting: the first visit after a quiet period can take about a minute while the server wakes up)
@@ -121,20 +121,21 @@ docs/
 - [x] Lobby, names, shareable room link, Leave button
 - [x] System messages (joined / left / reconnecting) and chat history that survives a refresh
 - [x] Transfer progress bar with delivery confirmation
-- [x] Hardening: signal relay limited to the same room, input validation, 500 MB cap, random room IDs
+- [x] Hardening: signal relay limited to the same room, input validation, random room IDs
 - [x] Optional TURN support, ICE candidate queue, smoke test
 - [x] Deployed on a free host (HTTPS) and tested phone <-> laptop
 - [ ] TURN relay for strict networks (supported in the code, but the live demo has none configured yet)
 - [ ] Refresh-safe seat reservation (no "left / joined" flicker on refresh)
 - [ ] Mobile layout polish
-- [ ] Stretch: transfer speed, pause/resume, integrity hash, drag-and-drop
+- [x] Receiver accepts first; large files stream to disk (File System Access API, OPFS fallback); SHA-256 checked before saving
+- [ ] Stretch: pause/resume, drag-and-drop
 - [ ] Waiting queue for full rooms
 
 ## Known limitations
 
 - A **page refresh** shows "left" and then "joined" (a WebRTC connection cannot survive a refresh; seat reservation is planned).
-- Files are limited to **500 MB** because the receiver keeps the whole file in memory.
-- Received files are not stored: after a refresh the chat history shows them as "No longer available".
+- Files are limited to **10 GB**. Browsers without File System Access or OPFS support fall back to keeping the file in memory and can only receive files up to **500 MB**.
+- Received files are not kept by the app: after a refresh the chat history shows them as "No longer available". In browsers that use browser storage (OPFS), a file waits there until you leave, refresh or clear the chat, so download it first.
 - Two people per room, and the same person in two tabs counts as two people.
 - Without a TURN server, some networks (strict firewalls, some mobile carriers) cannot connect. The live demo currently uses STUN only.
 - **Firefox:** in testing, two Firefox tabs on the *same machine* failed to connect ("ICE failed") while Chrome worked.
