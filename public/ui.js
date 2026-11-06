@@ -116,6 +116,9 @@ function clearChat(){
 
     objUrls.clear();
     transfers.clear();
+
+    // files kept in browser storage (OPFS) while they waited to be downloaded
+    if(typeof releaseReceivedFiles === "function") releaseReceivedFiles();
 }
 
 function getFormattedTime() {
@@ -135,6 +138,33 @@ function getFormattedSize(size){
     sz = sz.toFixed(1);
 
     return `${sz} ${suff[i]}`;
+}
+
+function formatDuration(ms){
+    const s = ms / 1000;
+    if(s < 10) return `${s.toFixed(1)} s`;
+    if(s < 60) return `${Math.round(s)} s`;
+    return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+}
+
+// MB here means 1024*1024 bytes, the same unit getFormattedSize() uses.
+function formatSpeed(bytesPerSecond){
+    return `${(bytesPerSecond / 1048576).toFixed(1)} MB/s`;
+}
+
+// e.g. "48.2 MB in 6.1 s · 7.9 MB/s · 3,086 chunks of 16 KB"
+function formatTransferSummary(file, ms){
+    let first = getFormattedSize(file.size);
+    const parts = [];
+    if(ms >= 50){                       // below that the speed would just be noise
+        first += ` in ${formatDuration(ms)}`;
+        parts.push(formatSpeed(file.size / (ms / 1000)));
+    }
+    parts.unshift(first);
+    if(Number.isSafeInteger(file.chunkCount) && file.chunkSize){
+        parts.push(`${file.chunkCount.toLocaleString("en-US")} chunks of ${Math.round(file.chunkSize / 1024)} KB`);
+    }
+    return parts.join(" · ");
 }
 
 function handleMyMessage(obj, isError=false){
@@ -165,9 +195,25 @@ function handleMyFile(meta, url){
     createTransferBubble(meta.id, meta, "me", "waiting", url);
 }
 
-// Receiver: the bubble appears when file-meta arrives and fills up as chunks come in.
-function handleTheirFile(meta){
-    createTransferBubble(meta.id, meta, "them", "transferring");
+// Receiver: the bubble appears when the offer arrives, with Accept / Decline buttons.
+// options: { note, onAccept, onDecline }. Nothing is sent to us before the receiver accepts.
+function handleTheirOffer(meta, options){
+    createTransferBubble(meta.id, meta, "them", "offered", null, options);
+}
+
+// Sender: the offer is out, now waiting for the other person to accept.
+function markOffered(id){
+    const t = transfers.get(id);
+    if(t && t.state === "waiting") setTransferState(t, "offered");
+}
+
+// Receiver clicked Accept: the save dialog / storage is being prepared.
+function markPreparing(id){
+    const t = transfers.get(id);
+    if(!t || t.state !== "offered") return;
+    t.statusEl.textContent = "Preparing…";
+    if(t.acceptBtn) t.acceptBtn.disabled = true;
+    if(t.declineBtn) t.declineBtn.disabled = true;
 }
 
 const form = document.querySelector(".input-container");
@@ -297,7 +343,7 @@ function updateSystemMessage(el, text, setActive = false){
 // Who drives it:  sender   = queueFile / sendFile loop / file-ack / file-error
 //                 receiver = file-meta / each chunk / file-end
 
-function createTransferBubble(id, file, who, state="waiting", url=null){
+function createTransferBubble(id, file, who, state="waiting", url=null, options={}){
     const { bubble, body } = createBubble(who, file.timestamp);
 
     const titleEl = document.createElement("span");
@@ -316,17 +362,30 @@ function createTransferBubble(id, file, who, state="waiting", url=null){
     statusEl.classList.add("transfer-status");
     body.appendChild(statusEl);
 
+    // after a successful transfer: "48.2 MB in 6.1 s · 7.9 MB/s · 3,086 chunks of 16 KB"
+    const statsEl = document.createElement("span");
+    statsEl.classList.add("transfer-stats");
+    body.appendChild(statsEl);
+
     const actionsEl = document.createElement("div");
     body.appendChild(actionsEl);
 
     const t = {
         id, bubble, body, who, file,
         title: titleEl.textContent,
-        progress, statusEl, actionsEl,
+        progress, statusEl, statsEl, actionsEl,
         preview: null,
         url: null,
+        savedAs: null,          // the file name chosen in the save dialog (file written straight to disk)
+        options,                // { note, onAccept, onDecline } for an incoming offer
+        acceptBtn: null,
+        declineBtn: null,
         state: null,
         lastPercent: -1,
+        startedAt: null,        // performance.now() when the transfer started
+        finishedAt: null,       // ... and when it finished
+        samples: [],            // recent [time, bytes] pairs, used for the live speed
+        lastTextAt: 0,
     };
 
     if(id !== null && id !== undefined) transfers.set(id, t);
@@ -359,8 +418,9 @@ function setTransferState(t, state, detail=""){
     t.state = state;
     t.bubble.classList.toggle("transfer-failed", state === "failed");
     t.actionsEl.replaceChildren();
+    t.statsEl.textContent = "";
 
-    const busy = (state === "waiting" || state === "transferring");
+    const busy = (state === "waiting" || state === "transferring" || (state === "offered" && t.who === "me"));
     t.progress.hidden = !busy;
 
     switch(state){
@@ -368,12 +428,30 @@ function setTransferState(t, state, detail=""){
             t.progress.removeAttribute("value");    // no value = indeterminate animation
             t.statusEl.textContent = (t.who === "me") ? "Waiting to send…" : "Waiting…";
             break;
+        case "offered":
+            if(t.who === "me"){
+                t.progress.removeAttribute("value");
+                t.statusEl.textContent = `Waiting for ${peerName ?? "the receiver"} to accept…`;
+            }else{
+                t.statusEl.textContent = `${peerName ?? "Your peer"} wants to send you this file`;
+                t.statsEl.textContent = t.options.note || "";
+                addOfferButtons(t);
+            }
+            break;
         case "transferring":
             t.progress.value = 0;
             t.statusEl.textContent = `${t.who === "me" ? "Sending" : "Receiving"}… 0%`;
+            t.startedAt = performance.now();                    // the stopwatch starts here
+            t.samples = [[t.startedAt, 0]];
+            t.lastTextAt = t.startedAt;
             break;
         case "done":
-            t.statusEl.textContent = (t.who === "me") ? "✓ Delivered" : "✓ Received";
+            t.statusEl.textContent = t.savedAs
+                ? `✓ Saved as ${t.savedAs}`
+                : ((t.who === "me") ? "✓ Delivered" : "✓ Received");
+            if(t.startedAt !== null && t.finishedAt !== null){
+                t.statsEl.textContent = formatTransferSummary(t.file, t.finishedAt - t.startedAt);
+            }
             addTransferDownloadLink(t);
             break;
         case "failed":
@@ -383,6 +461,25 @@ function setTransferState(t, state, detail=""){
             t.statusEl.textContent = "No longer available";
             break;
     }
+}
+
+function addOfferButtons(t){
+    const accept = document.createElement("button");
+    accept.type = "button";
+    accept.classList.add("accept-btn");
+    accept.textContent = "Accept";
+    // `onclick` (not addEventListener): the save dialog may only open straight from the user's click
+    accept.onclick = () => { if(t.options.onAccept) t.options.onAccept(); };
+
+    const decline = document.createElement("button");
+    decline.type = "button";
+    decline.classList.add("decline-btn");
+    decline.textContent = "Decline";
+    decline.onclick = () => { if(t.options.onDecline) t.options.onDecline(); };
+
+    t.actionsEl.append(accept, decline);
+    t.acceptBtn = accept;
+    t.declineBtn = decline;
 }
 
 function addTransferDownloadLink(t){
@@ -396,33 +493,67 @@ function addTransferDownloadLink(t){
     t.actionsEl.appendChild(link);
 }
 
-// percent: 0..100. Cheap to call for every chunk: the DOM is only touched
-// when the whole-number percent changes (a 500 MB file is ~32,000 chunks).
-function updateProgress(id, percent){
+const SPEED_WINDOW_MS = 2000;     // the live speed is averaged over the last ~2 seconds
+const SAMPLE_EVERY_MS = 100;      // ...from one sample per 100 ms
+const TEXT_EVERY_MS = 250;        // the text is redrawn at most 4 times a second
+
+// Bytes per second over the recent samples, or null when there is not enough data yet.
+function currentSpeed(t){
+    if(t.samples.length < 2) return null;
+    const first = t.samples[0];
+    const last = t.samples[t.samples.length - 1];
+    const seconds = (last[0] - first[0]) / 1000;
+    return seconds >= 0.3 ? (last[1] - first[1]) / seconds : null;
+}
+
+// percent: 0..100, bytesDone: bytes transferred so far (needed for the speed).
+// Cheap to call for every chunk (a 500 MB file is ~32,000 chunks): the DOM is only touched
+// when the whole-number percent changes or the text is due for a refresh.
+function updateProgress(id, percent, bytesDone){
     const t = transfers.get(id);
     if(!t || t.state === "done" || t.state === "failed" || t.state === "expired") return;
     if(!Number.isFinite(percent)) return;
 
-    const p = Math.max(0, Math.min(100, Math.floor(percent)));
-    if(t.state === "transferring" && p === t.lastPercent) return;
-
     if(t.state !== "transferring") setTransferState(t, "transferring");
 
+    const now = performance.now();
+
+    if(typeof bytesDone === "number"){
+        const last = t.samples[t.samples.length - 1];
+        if(now - last[0] >= SAMPLE_EVERY_MS){
+            t.samples.push([now, bytesDone]);
+            while(t.samples.length > 2 && now - t.samples[0][0] > SPEED_WINDOW_MS) t.samples.shift();
+        }
+    }
+
+    const p = Math.max(0, Math.min(100, Math.floor(percent)));
+    if(p === t.lastPercent && now - t.lastTextAt < TEXT_EVERY_MS) return;
+
     t.lastPercent = p;
+    t.lastTextAt = now;
     t.progress.value = p;
+
+    const speed = currentSpeed(t);
     t.statusEl.textContent = (p >= 100)
         ? "Finishing…"
-        : `${t.who === "me" ? "Sending" : "Receiving"}… ${p}%`;
+        : `${t.who === "me" ? "Sending" : "Receiving"}… ${p}%` + (speed === null ? "" : ` · ${formatSpeed(speed)}`);
 }
 
-// Receiver: pass the blob URL of the finished file. Sender: no url (it already has one).
-function finishTransfer(id, url){
+// Receiver: pass the URL of the finished file (to download), or the name it was saved under (written
+// straight to disk). Sender: neither (it already has its own url).
+function finishTransfer(id, url, savedAs){
     const t = transfers.get(id);
     if(!t || t.state === "done" || t.state === "failed") return;
 
     if(url) attachTransferUrl(t, url);
+    if(savedAs) t.savedAs = savedAs;
+    t.finishedAt = performance.now();
     setTransferState(t, "done");
     scrollToBottom();
+
+    if(t.startedAt !== null){
+        console.log(`[transfer] ${t.who === "me" ? "sent" : "received"} ${t.file.name}: ${formatTransferSummary(t.file, t.finishedAt - t.startedAt)}`);
+    }
 
     // The only moment a file becomes "real", so it is also the only place we save it.
     // (Restored bubbles go through createTransferBubble directly, so they are never saved twice.)
@@ -447,6 +578,6 @@ function failTransfer(id, reason){
 // Connection lost / peer left: nothing unfinished can finish any more.
 function failAllTransfers(reason){
     transfers.forEach((t, id) => {
-        if(t.state === "waiting" || t.state === "transferring") failTransfer(id, reason);
+        if(t.state === "waiting" || t.state === "offered" || t.state === "transferring") failTransfer(id, reason);
     });
 }

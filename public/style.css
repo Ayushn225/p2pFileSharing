@@ -406,3 +406,41 @@ h1 {
 .btn-secondary:hover {
 	background-color: #e2e8f0;
 }
+
+/* "48.2 MB in 6.1 s · 7.9 MB/s · 3,086 chunks of 16 KB" under a finished file */
+.transfer-stats {
+	font-size: 0.75em;
+	opacity: 0.8;
+}
+
+.transfer-stats:empty {
+	display: none;
+}
+
+/* Incoming file offer: Accept / Decline */
+.accept-btn,
+.decline-btn {
+	border: none;
+	border-radius: 14px;
+	padding: 6px 14px;
+	margin: 6px 6px 0 0;
+	font-size: 0.85em;
+	font-weight: 600;
+	cursor: pointer;
+}
+
+.accept-btn {
+	background: #34c759;
+	color: #fff;
+}
+
+.decline-btn {
+	background: #e5e5ea;
+	color: #333;
+}
+
+.accept-btn:disabled,
+.decline-btn:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
